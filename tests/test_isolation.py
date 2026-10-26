@@ -7,7 +7,7 @@ import sys
 import tempfile
 
 TMP = tempfile.mkdtemp()
-os.environ.update(SM_DEV='1', SM_NO_BACKGROUND='1', SM_DATA=TMP)
+os.environ.update(SM_DEV='1', SM_NO_BACKGROUND='1', SM_DATA=TMP, LEGACY_HOST='joseph.stage-messenger.com')
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 import live    # noqa: E402
@@ -232,5 +232,17 @@ check(anon.get('/server.py').status_code == 404 and anon.get('/../store.py').sta
 m = anon.get('/app.webmanifest?start=/g/abc?name=bass').get_json()
 check(m['start_url'] == '/g/abc?name=bass' and 'BASS' in m['name'], 'PWA manifest for a join link')
 check(anon.get('/app.webmanifest?start=//evil.com').get_json()['start_url'] == '/', 'manifest rejects off-site start')
+
+# ── Old rack-Pi links redirect to joseph.stage-messenger.com ─────────────────
+J = 'https://joseph.stage-messenger.com'
+for path, want in [('/mixer', J + '/mixer'), ('/mixer/', J + '/mixer/'), ('/mixer/api/state', J + '/mixer/api/state'),
+                   ('/watch/abc123', J + '/watch/abc123'), ('/control', J + '/control'),
+                   ('/?name=BASS&role=sender', J + '/?name=BASS&role=sender'), ('/?role=receiver', J + '/?role=receiver')]:
+    r = anon.get(path)
+    check(r.status_code == 302 and r.headers['Location'] == want, f'legacy {path} -> {want}')
+check(anon.get('/').status_code == 200, 'bare / still serves the hosted landing page')
+check(anon.get('/mixers').status_code == 404 and anon.get('/controller').status_code == 404, 'only exact legacy prefixes redirect')
+check(anon.get('/g/sometoken?name=BASS&role=sender').status_code == 200, 'hosted named links are not redirected')
+check(anon.post('/control', json={}).status_code != 302, 'non-GET requests are never redirected')
 
 print(f'\nALL {PASSED} CHECKS PASSED')

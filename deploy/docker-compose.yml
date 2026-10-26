@@ -11,6 +11,7 @@ services:
     env_file: /etc/stage-messenger/env        # SECRET_KEY (chmod 600, never in git)
     environment:
       - PUBLIC_URL=https://stage-messenger.com
+      - LEGACY_HOST=joseph.stage-messenger.com   # old rack-Pi links (/mixer, /watch, /control, /?name=) go here
       - SM_DATA=/data
     volumes:
       - ./data:/data                          # SQLite: admin, leaders, gigs

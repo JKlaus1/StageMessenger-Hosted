@@ -36,6 +36,11 @@ if not SECRET_KEY:
         raise SystemExit('SECRET_KEY is not set — refusing to start (set SM_DEV=1 for local dev).')
     SECRET_KEY = 'dev-only-not-secret'
 
+# The rack Pi used to live on the bare domain; it moved to its own subdomain (2026-10-26).
+# Old Pi links (/mixer, /watch/<token>, /control, singer links /?name=&role=) are sent there.
+LEGACY_HOST = os.environ.get('LEGACY_HOST', '').strip().strip('/')
+LEGACY_RE   = re.compile(r'^/(mixer|watch|control)(/|$)')
+
 ADMIN_SESSION_S = 12 * 3600
 PUBLIC_DIR      = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public')
 
@@ -128,6 +133,18 @@ def csrf_guard():
         origin = request.headers.get('Origin')
         if origin and urlsplit(origin).netloc != request.host:
             return err('Bad origin', 403)
+
+
+@app.before_request
+def legacy_redirect():
+    """Old rack-Pi links keep working: same path and query on LEGACY_HOST."""
+    if not LEGACY_HOST or request.method not in ('GET', 'HEAD'):
+        return None
+    p = request.path
+    if LEGACY_RE.match(p) or (p == '/' and ('name' in request.args or 'role' in request.args)):
+        qs = request.query_string.decode('latin-1')
+        return redirect(f'https://{LEGACY_HOST}{p}' + (f'?{qs}' if qs else ''), 302)
+    return None
 
 
 @app.after_request
