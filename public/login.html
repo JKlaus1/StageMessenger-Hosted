@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="/pwa.js"></script>
+  <link rel="icon" href="/pwa/control-192.png">
+  <link rel="apple-touch-icon" href="/pwa/control-192.png">
+  <title>Sign in — Stage Messenger</title>
+  <link rel="stylesheet" href="/sm.css">
+  <script src="/sm-ui.js"></script>
+  <style>
+    body { display: flex; flex-direction: column; justify-content: center; }
+    .logo { font-size: 1.2rem; font-weight: 900; color: var(--green); letter-spacing: .15em; text-transform: uppercase; text-align: center; margin-bottom: 1.25rem; }
+  </style>
+</head>
+<body>
+  <div class="logo">🎸 Stage Messenger</div>
+  <form class="card" id="f" autocomplete="on">
+    <div class="field"><label for="u">Username</label>
+      <input type="text" id="u" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
+    <div class="field"><label for="p">Password</label>
+      <input type="password" id="p" name="password" autocomplete="current-password" required></div>
+    <div class="err" id="err"></div>
+    <button class="btn primary block" id="go" type="submit">Sign in</button>
+  </form>
+  <p class="note" style="text-align:center">Leader accounts are created by the site admin.<br>Band members don't need one — just open your gig link.</p>
+  <script>
+    const f = document.getElementById('f'), err = document.getElementById('err'), go = document.getElementById('go');
+    document.getElementById('u').focus();
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      err.textContent = '';
+      go.disabled = true; go.textContent = 'Signing in…';
+      const r = await SMUI.api('/api/login', { username: document.getElementById('u').value.trim(),
+                                               password: document.getElementById('p').value });
+      if (r.ok) { location.replace('/dashboard'); return; }
+      err.textContent = r.error;
+      go.disabled = false; go.textContent = 'Sign in';
+    });
+  </script>
+</body>
+</html>

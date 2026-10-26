@@ -47,9 +47,12 @@ server.py   Flask + Flask-SocketIO app (routes, APIs, socket events)
 store.py    SQLite: admin password, leaders, gigs
 live.py     in-memory per-gig state, rate limiter
 manage.py   server CLI: set-admin-password, list-leaders, reset-leader-password
-public/     pages + assets (socket.io 4.7.5 client, qrcode, PWA icons)
+public/     landing, login, dashboard (leader), admin, messenger (member), display, control
+            sm-gig.js (gig socket: rejoin token, ended/kicked/invalid screens, focus reconnect)
+            sm-ui.js (API + in-page dialogs, copy/share/QR), sm-links.js (named + display links), sm.css
+            socket.io 4.7.5 client, qrcode, PWA icons
 deploy/     docker-compose.yml (copied to ~/services/stage-messenger/) and setup.sh
-tests/      test_isolation.py (67 checks), test_live_server.py (gunicorn + real WebSockets)
+tests/      test_isolation.py (67), test_live_server.py (14, real WebSockets), test_browser.py (20, headless Chromium)
 ```
 
 ## Server (see the home-server access handoff)
@@ -78,4 +81,16 @@ A rebuild drops live connections, so don't deploy during someone's gig.
 ```
 python3 tests/test_isolation.py
 python3 tests/test_live_server.py
+python3 tests/test_browser.py [screenshot_dir]     # needs playwright + chromium
 ```
+
+`test_browser.py` walks the whole flow:
+1. Admin creates a leader.
+2. The leader signs in and creates and shares a gig.
+3. A phone joins as sender, a stage display joins, and a named link auto-joins.
+4. Control sends to all; the phone sends song + key.
+5. Control kicks a device.
+6. The leader rotates the link: the old link is refused, and a reloaded phone rejoins with its device token.
+7. The leader ends the gig and every page shows the ended screen.
+
+It fails on any JS error.

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="/pwa.js"></script>
+  <link rel="icon" href="/pwa/control-192.png">
+  <link rel="apple-touch-icon" href="/pwa/control-192.png">
+  <title>My gigs — Stage Messenger</title>
+  <link rel="stylesheet" href="/sm.css">
+  <script src="/qrcode.min.js"></script>
+  <script src="/sm-ui.js"></script>
+  <script src="/sm-links.js"></script>
+  <style>
+    .gig-head { display: flex; justify-content: space-between; align-items: flex-start; gap: .75rem; }
+    .gig-name { font-size: 1.05rem; font-weight: 900; letter-spacing: .02em; word-break: break-word; }
+    .gig-meta { font-size: .7rem; color: var(--muted); font-weight: 700; letter-spacing: .06em; margin-top: .2rem; }
+    .gig-acts { display: flex; gap: .5rem; margin-top: .85rem; }
+    .gig-acts .btn { flex: 1; }
+    .share { margin-top: .9rem; padding-top: .9rem; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: .55rem; }
+    .join-url { font-size: .75rem; color: var(--green); background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: .7rem .9rem; }
+    .qr-box { text-align: center; }
+    .qr-box > div { display: inline-block; background: #fff; padding: 12px; border-radius: 12px; line-height: 0; }
+    .sub { font-size: .62rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); margin-top: .4rem; }
+    .ended-row { display: flex; justify-content: space-between; gap: .75rem; padding: .55rem 0; border-bottom: 1px solid var(--border); font-size: .8rem; }
+    .ended-row:last-child { border-bottom: 0; }
+    .ended-row span:last-child { color: var(--muted); font-size: .7rem; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div class="brand">🎸 Stage Messenger</div>
+    <div class="who"><span id="who">&nbsp;</span>
+      <div style="margin-top:.35rem;display:flex;gap:.35rem;justify-content:flex-end">
+        <button class="btn small" id="pw-btn">Password</button>
+        <button class="btn small" id="out-btn">Sign out</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="label" style="margin-top:0">New gig</div>
+  <form class="card" id="new-form" autocomplete="off">
+    <div class="field"><label for="g-name">Gig name</label>
+      <input type="text" id="g-name" maxlength="60" placeholder="e.g. Smith wedding — Dallas"></div>
+    <div class="field"><label for="g-date">Date (optional)</label>
+      <input type="date" id="g-date"></div>
+    <div class="err" id="new-err"></div>
+    <button class="btn primary block" id="new-btn" type="submit">Create gig</button>
+    <div class="note" id="cap" style="margin-top:.6rem;text-align:center"></div>
+  </form>
+
+  <div class="label">Your gigs</div>
+  <div id="active"></div>
+  <div class="note hidden" id="none">No active gigs yet — create one above, then share its link with the band.</div>
+
+  <div id="ended-wrap" class="hidden">
+    <div class="label">Ended (last 30 days)</div>
+    <div class="card" id="ended"></div>
+  </div>
+
+  <script>
+    const E = SMUI.el;
+    const cards = new Map();     // gig id -> { root, update(g) }
+    let me = null;
+
+    function gigUrl(token) { return location.origin + '/g/' + encodeURIComponent(token); }
+
+    function deviceText(n) { return n === 1 ? '1 device' : n + ' devices'; }
+
+    function makeCard(g) {
+      const state = { g: g, gen: null, qrFor: '' };
+      const root = E('div', { class: 'card' });
+      const head = E('div', { class: 'gig-head' });
+      const left = E('div');
+      const name = E('div', { class: 'gig-name' });
+      const meta = E('div', { class: 'gig-meta' });
+      left.appendChild(name); left.appendChild(meta);
+      const live = E('span', { class: 'pill' });
+      const dot = E('span', { class: 'dot' });
+      const liveTxt = E('span');
+      live.appendChild(dot); live.appendChild(liveTxt);
+      head.appendChild(left); head.appendChild(live);
+
+      const acts = E('div', { class: 'gig-acts' });
+      const shareBtn = E('button', { class: 'btn', type: 'button' }, 'Share link');
+      const ctlBtn = E('a', { class: 'btn primary', href: '/c/' + encodeURIComponent(g.id) }, 'Open Control');
+      acts.appendChild(shareBtn); acts.appendChild(ctlBtn);
+
+      const share = E('div', { class: 'share hidden' });
+      share.appendChild(E('div', { class: 'sub' }, 'Band join link'));
+      const url = E('div', { class: 'join-url mono' });
+      share.appendChild(url);
+      const row = E('div', { class: 'row' });
+      row.appendChild(E('button', { class: 'btn', type: 'button', onclick: () => SMUI.copy(gigUrl(state.g.join_token)) }, 'Copy'));
+      row.appendChild(E('button', { class: 'btn', type: 'button', onclick: () =>
+        SMUI.share(gigUrl(state.g.join_token), state.g.name, state.g.name + ' — join the gig on Stage Messenger') }, 'Share'));
+      const qrBtn = E('button', { class: 'btn', type: 'button' }, 'QR');
+      row.appendChild(qrBtn);
+      share.appendChild(row);
+      const qrBox = E('div', { class: 'qr-box hidden' }); const qrIn = E('div'); qrBox.appendChild(qrIn);
+      share.appendChild(qrBox);
+      share.appendChild(E('div', { class: 'note' }, 'Anyone with this link can join. Members pick their own name when they open it.'));
+      share.appendChild(E('div', { class: 'sub' }, 'Named & stage display links'));
+      const genBox = E('div');
+      share.appendChild(genBox);
+      share.appendChild(E('div', { class: 'sub' }, 'Link security'));
+      const danger = E('div', { class: 'row' });
+      danger.appendChild(E('button', { class: 'btn', type: 'button', onclick: rotate }, 'Rotate link'));
+      danger.appendChild(E('button', { class: 'btn danger', type: 'button', onclick: endGig }, 'End gig'));
+      share.appendChild(danger);
+
+      shareBtn.addEventListener('click', () => {
+        const open = share.classList.toggle('hidden') === false;
+        shareBtn.textContent = open ? 'Hide' : 'Share link';
+        if (open && !state.gen) state.gen = SMLinks.mount(genBox, () => state.g.join_token, state.g.name);
+      });
+      qrBtn.addEventListener('click', () => {
+        const show = qrBox.classList.toggle('hidden') === false;
+        if (show) drawQr();
+      });
+      function drawQr() {
+        const u = gigUrl(state.g.join_token);
+        if (state.qrFor !== u) { SMUI.qr(qrIn, u, 220); state.qrFor = u; }
+      }
+
+      async function rotate() {
+        const ok = await SMUI.confirm('Rotate the join link?',
+          'The current link stops admitting new devices. Phones already in the gig stay connected.\nShare the new link with anyone who still needs to join.',
+          'Rotate');
+        if (!ok) return;
+        const r = await SMUI.api('/api/gigs/' + encodeURIComponent(state.g.id) + '/rotate', {});
+        if (!r.ok) return SMUI.toast(r.error, true);
+        update(r.data.gig);
+        if (state.gen) state.gen.refresh();
+        if (!qrBox.classList.contains('hidden')) drawQr();
+        SMUI.toast('New link ready');
+      }
+
+      async function endGig() {
+        const ok = await SMUI.confirm('End “' + state.g.name + '”?',
+          'Every device is disconnected and the link stops working. This can’t be undone.', 'End gig', true);
+        if (!ok) return;
+        const r = await SMUI.api('/api/gigs/' + encodeURIComponent(state.g.id) + '/end', {});
+        if (!r.ok) return SMUI.toast(r.error, true);
+        SMUI.toast('Gig ended');
+        load();
+      }
+
+      function update(ng) {
+        state.g = ng;
+        name.textContent = ng.name;
+        meta.textContent = (ng.date ? ng.date + '  ·  ' : '') + 'active ' + SMUI.ago(ng.last_activity);
+        dot.className = 'dot' + (ng.devices ? ' live' : '');
+        liveTxt.textContent = deviceText(ng.devices);
+        url.textContent = gigUrl(ng.join_token);
+        if (state.gen) state.gen.refresh();
+      }
+
+      root.appendChild(head); root.appendChild(acts); root.appendChild(share);
+      update(g);
+      return { root: root, update: update };
+    }
+
+    function render(gigs) {
+      const active = gigs.filter(g => !g.ended_at);
+      const ended = gigs.filter(g => g.ended_at);
+      const box = document.getElementById('active');
+      const seen = new Set();
+      active.forEach((g, i) => {
+        seen.add(g.id);
+        let c = cards.get(g.id);
+        if (!c) { c = makeCard(g); cards.set(g.id, c); }
+        else c.update(g);
+        if (box.children[i] !== c.root) box.insertBefore(c.root, box.children[i] || null);
+      });
+      for (const [id, c] of cards) if (!seen.has(id)) { c.root.remove(); cards.delete(id); }
+      document.getElementById('none').classList.toggle('hidden', active.length > 0);
+
+      const eb = document.getElementById('ended');
+      eb.innerHTML = '';
+      ended.slice(0, 20).forEach(g => {
+        const r = E('div', { class: 'ended-row' });
+        r.appendChild(E('span', null, g.name + (g.date ? '  ·  ' + g.date : '')));
+        const why = g.end_reason === 'expired' ? 'expired' : g.end_reason === 'ended-by-admin' ? 'closed by admin' : 'ended';
+        r.appendChild(E('span', null, why + ' ' + SMUI.ago(g.ended_at)));
+        eb.appendChild(r);
+      });
+      document.getElementById('ended-wrap').classList.toggle('hidden', ended.length === 0);
+      return active.length;
+    }
+
+    async function load() {
+      const r = await SMUI.api('/api/gigs');
+      if (r.status === 401) { location.replace('/login'); return; }
+      if (!r.ok) return;
+      const n = render(r.data.gigs);
+      const max = r.data.max_gigs;
+      document.getElementById('cap').textContent = n + ' of ' + max + ' active gigs';
+      document.getElementById('new-btn').disabled = n >= max;
+    }
+
+    async function init() {
+      const r = await SMUI.api('/api/me');
+      if (r.status === 401) { location.replace('/login'); return; }
+      me = r.data.leader;
+      document.getElementById('who').textContent = me.display_name;
+      await load();
+      setInterval(() => { if (document.visibilityState === 'visible') load(); }, 15000);
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') load(); });
+    }
+
+    document.getElementById('new-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const err = document.getElementById('new-err');
+      const btn = document.getElementById('new-btn');
+      err.textContent = '';
+      const name = document.getElementById('g-name').value.trim();
+      if (!name) { err.textContent = 'Give the gig a name.'; return; }
+      btn.disabled = true;
+      const r = await SMUI.api('/api/gigs', { name, date: document.getElementById('g-date').value });
+      btn.disabled = false;
+      if (!r.ok) { err.textContent = r.error; return; }
+      document.getElementById('g-name').value = '';
+      document.getElementById('g-date').value = '';
+      await load();
+      const c = cards.get(r.data.gig.id);
+      if (c) { c.root.querySelector('.gig-acts .btn').click(); c.root.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      SMUI.toast('Gig created — share the link with the band');
+    });
+
+    document.getElementById('out-btn').addEventListener('click', async () => {
+      await SMUI.api('/api/logout', {});
+      location.replace('/login');
+    });
+
+    document.getElementById('pw-btn').addEventListener('click', async () => {
+      const cur = await SMUI.prompt('Change password', 'Current password', '', 'password', 'Next');
+      if (cur == null) return;
+      const nw = await SMUI.prompt('Change password', 'New password (at least 8 characters)', '', 'password', 'Save');
+      if (nw == null) return;
+      const r = await SMUI.api('/api/account/password', { current: cur, new: nw });
+      SMUI.toast(r.ok ? 'Password changed — other devices are signed out' : r.error, !r.ok);
+    });
+
+    init();
+  </script>
+</body>
+</html>

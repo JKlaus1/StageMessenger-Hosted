@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="/pwa.js"></script>
+  <link rel="icon" href="/pwa/messenger-192.png">
+  <link rel="apple-touch-icon" href="/pwa/messenger-192.png">
+  <title>Stage Messenger</title>
+  <link rel="stylesheet" href="/sm.css">
+  <style>
+    body { display: flex; flex-direction: column; justify-content: center; text-align: center; gap: 1.1rem; }
+    .logo { font-size: clamp(1.6rem, 7vw, 2.4rem); font-weight: 900; color: var(--green); letter-spacing: .12em; text-transform: uppercase; }
+    .tag  { font-size: .8rem; color: var(--muted); font-weight: 700; letter-spacing: .2em; text-transform: uppercase; }
+    .lead { color: var(--soft); font-size: .95rem; line-height: 1.5; max-width: 26rem; margin: .5rem auto; }
+    .members { margin-top: 1.5rem; }
+  </style>
+</head>
+<body>
+  <div class="logo">🎸 Stage Messenger</div>
+  <div class="tag">Live show comms</div>
+  <p class="lead">Send the next song, key and cues to every phone and stage screen on the gig — from your own phone.</p>
+  <a class="btn primary" href="/login" style="align-self:center;padding:1rem 2rem">Band leader sign in</a>
+  <div class="card members">
+    <div class="note"><strong style="color:var(--text)">Playing a gig?</strong><br>
+      Open the link or scan the QR code your band leader sent you. There is nothing to sign up for.</div>
+  </div>
+</body>
+</html>
