@@ -174,6 +174,16 @@
     return Math.round(d / 86400) + ' days ago';
   }
 
-  window.SMUI = { api: api, el: el, confirm: confirmBox, prompt: promptBox, alert: alertBox, toast: toast,
+  // A leader's name as a Stage Messenger device name: A-Z 0-9 space _ -, max 16.
+  function senderName(display, username) {
+    function clean(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9 _-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 16).trim(); }
+    return clean(display) || clean(username) || 'LEADER';
+  }
+
+  function senderUrl(token, name) {
+    return location.origin + '/g/' + encodeURIComponent(token) + '?name=' + encodeURIComponent(name) + '&role=sender';
+  }
+
+  window.SMUI = { senderName: senderName, senderUrl: senderUrl, api: api, el: el, confirm: confirmBox, prompt: promptBox, alert: alertBox, toast: toast,
                   copy: copyText, share: shareLink, qr: qr, randomPassword: randomPassword, ago: fmtAgo };
 })();

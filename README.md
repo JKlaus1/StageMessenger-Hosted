@@ -52,7 +52,7 @@ public/     landing, login, dashboard (leader), admin, messenger (member), displ
             sm-ui.js (API + in-page dialogs, copy/share/QR), sm-links.js (named + display links), sm.css
             socket.io 4.7.5 client, qrcode, PWA icons
 deploy/     docker-compose.yml (copied to ~/services/stage-messenger/) and setup.sh
-tests/      test_isolation.py (78), test_live_server.py (14, real WebSockets), test_browser.py (20, headless Chromium)
+tests/      test_isolation.py (78), test_live_server.py (14, real WebSockets), test_browser.py (25, headless Chromium)
 ```
 
 ## Server (see the home-server access handoff)

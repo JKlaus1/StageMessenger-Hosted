@@ -178,6 +178,41 @@
       display: none;
     }
 
+    /* ── Song + key ── */
+    #song-section { margin-bottom: 1.5rem; }
+    #song-input {
+      width: 100%; padding: 0.9rem 1rem; background: var(--card); border: 2px solid var(--border);
+      border-radius: 12px; color: var(--text); font-size: 1.05rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.06em; outline: none; caret-color: var(--green); -webkit-appearance: none; margin-bottom: 0.6rem;
+    }
+    #song-input::placeholder { color: #222244; font-weight: 400; text-transform: none; letter-spacing: 0; }
+    #song-input:focus { border-color: var(--green); }
+    .key-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.3rem; margin-bottom: 0.5rem; }
+    .key-btn {
+      padding: 0.65rem 0; background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); font-size: 0.9rem; font-weight: 800; cursor: pointer; -webkit-tap-highlight-color: transparent;
+    }
+    .key-btn.active { border-color: var(--green); background: rgba(0,255,136,0.12); color: var(--green); }
+    .song-row { display: flex; gap: 0.35rem; margin-bottom: 0.5rem; }
+    .song-row button {
+      flex: 1; padding: 0.55rem; background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--muted); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+      cursor: pointer; -webkit-tap-highlight-color: transparent;
+    }
+    .song-row button.active { border-color: var(--green); color: var(--green); background: rgba(0,255,136,0.08); }
+    #song-send-btn {
+      width: 100%; padding: 0.9rem; background: #0066cc; color: #fff; border: none; border-radius: 12px;
+      font-size: 0.95rem; font-weight: 900; letter-spacing: 0.15em; text-transform: uppercase; cursor: pointer;
+      -webkit-tap-highlight-color: transparent; transition: opacity 0.12s, transform 0.1s, background 0.2s;
+    }
+    #song-send-btn:active { opacity: 0.8; transform: scale(0.98); }
+    #song-send-btn.sent { background: #00cc66; color: #000; }
+    #song-send-btn.no-target { background: #444; color: #888; cursor: default; }
+    #sender-page-link {
+      display: block; text-align: center; margin-top: 0.6rem; font-size: 0.68rem; font-weight: 700;
+      letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); text-decoration: none;
+    }
+
     /* ── Message input ── */
     .input-wrap {
       position: relative;
@@ -427,6 +462,37 @@
   </div>
 
   <!-- Message -->
+  <!-- Song + key (same message the singer sender page sends: blue, "KEY OF …") -->
+  <div class="label">Next Song</div>
+  <div id="song-section">
+    <input type="text" id="song-input" placeholder="Song name…" maxlength="30"
+           autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
+    <div class="key-grid">
+      <button class="key-btn" data-key="C">C</button>
+      <button class="key-btn" data-key="Db">Db</button>
+      <button class="key-btn" data-key="D">D</button>
+      <button class="key-btn" data-key="Eb">Eb</button>
+      <button class="key-btn" data-key="E">E</button>
+      <button class="key-btn" data-key="F">F</button>
+      <button class="key-btn" data-key="Gb">Gb</button>
+      <button class="key-btn" data-key="G">G</button>
+      <button class="key-btn" data-key="Ab">Ab</button>
+      <button class="key-btn" data-key="A">A</button>
+      <button class="key-btn" data-key="Bb">Bb</button>
+      <button class="key-btn" data-key="B">B</button>
+    </div>
+    <div class="song-row">
+      <button class="majmin-btn active" data-mode="maj">Major</button>
+      <button class="majmin-btn" data-mode="min">Minor</button>
+    </div>
+    <div class="song-row">
+      <button id="clear-key-btn">✕ Clear Key</button>
+      <button id="clear-song-btn">✕ Clear All</button>
+    </div>
+    <button id="song-send-btn">Send Song + Key</button>
+    <a id="sender-page-link" href="#" target="_blank" rel="noopener">🎤 Open the phone sender page ↗</a>
+  </div>
+
   <div class="label">Message</div>
   <div class="input-wrap" style="margin-bottom:0.5rem">
     <input type="text" id="message-input"
@@ -543,6 +609,7 @@
     function updateSendBtn() {
       const hasTarget = sendToAll || selectedRooms.size > 0;
       sendBtn.classList.toggle('no-target', !hasTarget);
+      document.getElementById('song-send-btn').classList.toggle('no-target', !hasTarget);
     }
 
     allChip.addEventListener('click', () => setAllMode(true));
@@ -690,12 +757,13 @@
     socket.on('gig-info', (g) => {
       document.getElementById('gig-title').textContent = g.name;
       document.title = g.name + ' — Control';
-      if (g.join_token && g.join_token !== joinToken) { joinToken = g.join_token; qrFor = ''; linkGen && linkGen.refresh(); }
+      if (g.join_token && g.join_token !== joinToken) { joinToken = g.join_token; qrFor = ''; linkGen && linkGen.refresh(); updateSenderLink(); }
     });
     socket.on('link-rotated', (d) => {
       joinToken = d.join_token;
       qrFor = '';
       if (linkGen) linkGen.refresh();
+      updateSenderLink();
       if (document.getElementById('qr-modal').classList.contains('open')) openQR();
       SMUI.toast('Join link rotated — old link no longer admits new devices');
     });
@@ -821,6 +889,60 @@
 
     msgOverlay.addEventListener('click', dismissIncoming);
     socket.on('message', showIncoming);
+
+    // -- Song + key (goes to the same targets as messages; color matches the singer page)
+    let selectedKey = null, selectedMode = 'maj';
+    const songInput = document.getElementById('song-input');
+    const songSendBtn = document.getElementById('song-send-btn');
+    document.querySelectorAll('.key-btn').forEach(btn => btn.addEventListener('click', () => {
+      const on = !btn.classList.contains('active');
+      document.querySelectorAll('.key-btn').forEach(b => b.classList.remove('active'));
+      if (on) btn.classList.add('active');
+      selectedKey = on ? btn.dataset.key : null;
+    }));
+    document.querySelectorAll('.majmin-btn').forEach(btn => btn.addEventListener('click', () => {
+      document.querySelectorAll('.majmin-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      selectedMode = btn.dataset.mode;
+    }));
+    function clearKey() {
+      selectedKey = null;
+      document.querySelectorAll('.key-btn').forEach(b => b.classList.remove('active'));
+    }
+    document.getElementById('clear-key-btn').addEventListener('click', clearKey);
+    document.getElementById('clear-song-btn').addEventListener('click', () => {
+      songInput.value = '';
+      clearKey();
+      selectedMode = 'maj';
+      document.querySelectorAll('.majmin-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === 'maj'));
+    });
+    function sendSong() {
+      const song = songInput.value.trim();
+      if (!song || !socket.connected || songSendBtn.classList.contains('no-target')) return;
+      socket.emit('send-message', {
+        targets:  sendToAll ? ['all'] : [...selectedRooms],
+        message:  song,
+        subtitle: selectedKey ? 'KEY OF ' + selectedKey + (selectedMode === 'min' ? 'm' : '') : '',
+        color:    '#0066cc',
+        duration: selectedDuration || 86400000,
+      });
+      songSendBtn.textContent = 'Sent ✓';
+      songSendBtn.classList.add('sent');
+      setTimeout(() => { songSendBtn.textContent = 'Send Song + Key'; songSendBtn.classList.remove('sent'); }, 1200);
+    }
+    songSendBtn.addEventListener('click', sendSong);
+    songInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendSong(); });
+
+    // -- Phone sender page for this gig, joined as the signed-in leader
+    let leaderName = 'LEADER';
+    SMUI.api('/api/me').then(r => {
+      if (r.ok) leaderName = SMUI.senderName(r.data.leader.display_name, r.data.leader.username);
+      updateSenderLink();
+    });
+    function updateSenderLink() {
+      const a = document.getElementById('sender-page-link');
+      if (joinToken) a.href = SMUI.senderUrl(joinToken, leaderName);
+    }
 
     // -- Named / display link builder (uses the gig's current join token)
     const linkGen = SMLinks.mount(document.getElementById('link-gen'), () => joinToken, '');

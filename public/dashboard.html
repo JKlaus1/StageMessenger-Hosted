@@ -16,7 +16,7 @@
     .gig-name { font-size: 1.05rem; font-weight: 900; letter-spacing: .02em; word-break: break-word; }
     .gig-meta { font-size: .7rem; color: var(--muted); font-weight: 700; letter-spacing: .06em; margin-top: .2rem; }
     .gig-acts { display: flex; gap: .5rem; margin-top: .85rem; }
-    .gig-acts .btn { flex: 1; }
+    .gig-acts .btn { flex: 1; padding-left: .5rem; padding-right: .5rem; }
     .share { margin-top: .9rem; padding-top: .9rem; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: .55rem; }
     .join-url { font-size: .75rem; color: var(--green); background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: .7rem .9rem; }
     .qr-box { text-align: center; }
@@ -82,9 +82,11 @@
       head.appendChild(left); head.appendChild(live);
 
       const acts = E('div', { class: 'gig-acts' });
-      const shareBtn = E('button', { class: 'btn', type: 'button' }, 'Share link');
-      const ctlBtn = E('a', { class: 'btn primary', href: '/c/' + encodeURIComponent(g.id) }, 'Open Control');
-      acts.appendChild(shareBtn); acts.appendChild(ctlBtn);
+      const shareBtn = E('button', { class: 'btn', type: 'button' }, 'Share');
+      const songBtn = E('a', { class: 'btn' }, 'Send songs');
+      songBtn.title = 'Opens this gig’s song + key sender page, joined as you';
+      const ctlBtn = E('a', { class: 'btn primary', href: '/c/' + encodeURIComponent(g.id) }, 'Control');
+      acts.appendChild(shareBtn); acts.appendChild(songBtn); acts.appendChild(ctlBtn);
 
       const share = E('div', { class: 'share hidden' });
       share.appendChild(E('div', { class: 'sub' }, 'Band join link'));
@@ -111,7 +113,7 @@
 
       shareBtn.addEventListener('click', () => {
         const open = share.classList.toggle('hidden') === false;
-        shareBtn.textContent = open ? 'Hide' : 'Share link';
+        shareBtn.textContent = open ? 'Hide' : 'Share';
         if (open && !state.gen) state.gen = SMLinks.mount(genBox, () => state.g.join_token, state.g.name);
       });
       qrBtn.addEventListener('click', () => {
@@ -153,6 +155,7 @@
         dot.className = 'dot' + (ng.devices ? ' live' : '');
         liveTxt.textContent = deviceText(ng.devices);
         url.textContent = gigUrl(ng.join_token);
+        songBtn.href = SMUI.senderUrl(ng.join_token, SMUI.senderName(me && me.display_name, me && me.username));
         if (state.gen) state.gen.refresh();
       }
 
