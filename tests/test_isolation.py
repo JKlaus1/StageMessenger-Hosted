@@ -245,4 +245,18 @@ check(anon.get('/mixers').status_code == 404 and anon.get('/controller').status_
 check(anon.get('/g/sometoken?name=BASS&role=sender').status_code == 200, 'hosted named links are not redirected')
 check(anon.post('/control', json={}).status_code != 302, 'non-GET requests are never redirected')
 
+# ── Cache busting ────────────────────────────────────────────────────────────
+import re as _re
+html = anon.get('/login').get_data(as_text=True)
+tags = _re.findall(r'(?:src|href)="(/[\w./-]+\.(?:js|css))(\?v=[0-9a-f]{12})?"', html)
+check(tags and all(v for _, v in tags), 'every local script/stylesheet on a page carries ?v=<hash>')
+vurl = [p + v for p, v in tags if p == '/sm-ui.js'][0]
+r = anon.get(vurl)
+check('immutable' in r.headers.get('Cache-Control', ''), 'versioned asset is cached as immutable')
+r = anon.get('/sm-ui.js')
+check(r.headers.get('Cache-Control') == 'no-cache', 'unversioned asset is no-cache')
+r = anon.get('/sm-ui.js?v=000000000000')
+check(r.headers.get('Cache-Control') == 'no-cache', 'stale version tag is not cached as immutable')
+check(anon.get('/login').headers.get('Cache-Control') == 'no-cache', 'pages stay no-cache')
+
 print(f'\nALL {PASSED} CHECKS PASSED')

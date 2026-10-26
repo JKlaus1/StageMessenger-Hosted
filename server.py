@@ -14,6 +14,7 @@ Isolation
 Run (container): gunicorn -w 1 --threads 100 -b 0.0.0.0:8000 server:app
 One worker only: live state is in this process's memory.
 """
+import hashlib
 import os
 import re
 import time
@@ -162,8 +163,35 @@ def headers(resp):
 
 # ── Pages ────────────────────────────────────────────────────────────────────
 
+# Cache busting: every local script/stylesheet a page references gets ?v=<content hash>, so a
+# deploy can never pair a new page with an old cached script (Cloudflare adds a 4 h browser
+# cache to responses without Cache-Control). Versioned assets are immutable; HTML is no-cache.
+ASSET_RE = re.compile(r'((?:src|href)=")(/[\w./-]+\.(?:js|css))(")')
+_asset_ver = {}
+
+
+def asset_version(path):
+    v = _asset_ver.get(path)
+    if v is None:
+        full = os.path.normpath(os.path.join(PUBLIC_DIR, path.lstrip('/')))
+        try:
+            with open(full, 'rb') as f:
+                v = hashlib.sha256(f.read()).hexdigest()[:12]
+        except OSError:
+            v = ''
+        _asset_ver[path] = v
+    return v
+
+
 def page(name):
-    return send_from_directory(PUBLIC_DIR, name)
+    with open(os.path.join(PUBLIC_DIR, name), encoding='utf-8') as f:
+        html = f.read()
+
+    def tag(m):
+        v = asset_version(m.group(2))
+        return m.group(1) + m.group(2) + (f'?v={v}' if v else '') + m.group(3)
+
+    return app.response_class(ASSET_RE.sub(tag, html), mimetype='text/html')
 
 
 @app.route('/healthz')
@@ -223,7 +251,12 @@ def admin_page():
 def static_file(fname):
     if fname.endswith('.html'):
         abort(404)
-    return send_from_directory(PUBLIC_DIR, fname)
+    resp = send_from_directory(PUBLIC_DIR, fname)
+    if request.args.get('v') and request.args['v'] == asset_version('/' + fname):
+        resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+    else:
+        resp.headers['Cache-Control'] = 'no-cache'
+    return resp
 
 
 # ── Installable app manifest ─────────────────────────────────────────────────

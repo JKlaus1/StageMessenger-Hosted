@@ -196,7 +196,9 @@
       const r = await SMUI.api('/api/gigs');
       if (r.status === 401) { location.replace('/login'); return; }
       if (!r.ok) return;
-      const n = render(r.data.gigs);
+      let n;
+      try { n = render(r.data.gigs); }
+      catch (e) { SMUI.toast('Couldn’t show your gigs — reload the page', true); throw e; }
       const max = r.data.max_gigs;
       document.getElementById('cap').textContent = n + ' of ' + max + ' active gigs';
       document.getElementById('new-btn').disabled = n >= max;
