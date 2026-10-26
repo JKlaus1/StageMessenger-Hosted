@@ -6,6 +6,7 @@
   <link rel="icon" href="/pwa/control-192.png">
   <title>Admin — Stage Messenger</title>
   <link rel="stylesheet" href="/sm.css">
+  <script src="/qrcode.min.js"></script>
   <script src="/sm-ui.js"></script>
   <style>
     .item { display: flex; justify-content: space-between; align-items: flex-start; gap: .75rem; padding: .8rem 0; border-bottom: 1px solid var(--border); }
@@ -38,27 +39,29 @@
   </form>
 
   <div id="main" class="hidden">
-    <div class="label" style="margin-top:0">New leader</div>
-    <form class="card" id="new-leader" autocomplete="off">
+    <div class="label" style="margin-top:0">Invite a leader</div>
+    <form class="card" id="invite-form" autocomplete="off">
+      <div class="field"><label for="iv-label">Who it's for (optional)</label>
+        <input type="text" id="iv-label" maxlength="40" placeholder="e.g. Mike — RDB"></div>
       <div class="row">
-        <div class="field"><label for="nl-user">Username</label>
-          <input type="text" id="nl-user" maxlength="32" autocapitalize="none" spellcheck="false" placeholder="e.g. mike"></div>
-        <div class="field"><label for="nl-name">Display name</label>
-          <input type="text" id="nl-name" maxlength="40" placeholder="e.g. Mike — RDB"></div>
+        <div class="field"><label for="iv-max">Max active gigs</label>
+          <input type="number" id="iv-max" min="1" max="50" value="5"></div>
+        <div class="field"><label for="iv-days">Link expires in</label>
+          <select id="iv-days">
+            <option value="1">1 day</option><option value="3">3 days</option>
+            <option value="7" selected>7 days</option><option value="14">14 days</option><option value="30">30 days</option>
+          </select></div>
       </div>
-      <div class="field"><label for="nl-pw">Password</label>
-        <div class="pw-row">
-          <input type="text" id="nl-pw" maxlength="256" autocomplete="new-password" spellcheck="false">
-          <button class="btn" type="button" id="nl-gen">Generate</button>
-        </div>
-      </div>
-      <div class="field" style="max-width:10rem"><label for="nl-max">Max active gigs</label>
-        <input type="number" id="nl-max" min="1" max="50" value="5"></div>
-      <div class="err" id="nl-err"></div>
-      <button class="btn primary block" type="submit">Create leader</button>
-      <div class="note" style="margin-top:.6rem">Send the leader their username, password and the sign-in page
-        (<span class="mono" id="login-url"></span>). They can change the password after signing in.</div>
+      <div class="err" id="iv-err"></div>
+      <button class="btn primary block" type="submit">Create invite link</button>
+      <div class="note" style="margin-top:.6rem">The leader opens the link, picks their own username and password,
+        and lands on their dashboard. Each link works once.</div>
     </form>
+
+    <div id="pending-wrap" class="hidden">
+      <div class="label">Pending links</div>
+      <div class="card" id="pending"></div>
+    </div>
 
     <div class="label">Leaders</div>
     <div class="card" id="leaders"></div>
@@ -69,7 +72,6 @@
 
   <script>
     const E = SMUI.el;
-    document.getElementById('login-url').textContent = location.origin + '/login';
 
     function show(signedIn) {
       document.getElementById('login').classList.toggle('hidden', signedIn);
@@ -93,7 +95,7 @@
     function renderLeaders(leaders) {
       const box = document.getElementById('leaders');
       box.innerHTML = '';
-      if (!leaders.length) { box.appendChild(E('div', { class: 'note' }, 'No leaders yet — create one above.')); return; }
+      if (!leaders.length) { box.appendChild(E('div', { class: 'note' }, 'No leaders yet — send an invite link above.')); return; }
       leaders.forEach(l => {
         const it = E('div', { class: 'item' });
         const main = E('div', { class: 'item-main' });
@@ -103,15 +105,16 @@
         main.appendChild(E('div', { class: 'item-sub' },
           l.display_name + '  ·  gigs ' + l.active_gigs + '/' + l.max_gigs + '  ·  last sign-in ' + SMUI.ago(l.last_login)));
         const acts = E('div', { class: 'item-acts' });
-        acts.appendChild(btn('Reset password', async () => {
-          const pw = await SMUI.prompt('New password for ' + l.username,
-            'Their other sessions are signed out. Send them the new password.', SMUI.randomPassword(), 'text', 'Set password');
-          if (pw == null) return;
-          if (await post('/admin/api/leaders/' + l.id, { password: pw })) {
-            const creds = 'Stage Messenger leader sign-in\n' + location.origin + '/login\nUsername: ' + l.username + '\nPassword: ' + pw;
-            SMUI.alert('Password reset', creds, creds);
-            load();
-          }
+        acts.appendChild(btn('Reset link', async () => {
+          const ok = await SMUI.confirm('Password reset link for ' + l.username + '?',
+            'Makes a one-time link (valid 24 hours) where they choose a new password. Their current password keeps working until they use it. Any earlier reset link for them stops working.',
+            'Make link');
+          if (!ok) return;
+          const r = await post('/admin/api/leaders/' + l.id + '/reset-link', {});
+          if (!r) return;
+          await SMUI.linkBox('Reset link for ' + l.username, 'Send this to them. It works once, for 24 hours.',
+                             location.origin + r.data.path, 'Set a new Stage Messenger password');
+          load();
         }));
         acts.appendChild(btn('Max gigs', async () => {
           const v = await SMUI.prompt('Max active gigs for ' + l.username, '1–50', String(l.max_gigs), 'number', 'Save');
@@ -126,6 +129,30 @@
           }
           if (await post('/admin/api/leaders/' + l.id, { active: !l.active }, l.active ? 'Disabled' : 'Enabled')) load();
         }, l.active ? 'danger' : ''));
+        it.appendChild(main); it.appendChild(acts);
+        box.appendChild(it);
+      });
+    }
+
+    function renderPending(invites) {
+      const box = document.getElementById('pending');
+      box.innerHTML = '';
+      document.getElementById('pending-wrap').classList.toggle('hidden', !invites.length);
+      invites.forEach(iv => {
+        const it = E('div', { class: 'item' });
+        const main = E('div', { class: 'item-main' });
+        const title = iv.kind === 'reset' ? 'Password reset — ' + (iv.leader || '?') : (iv.label || 'Leader invite');
+        main.appendChild(E('div', { class: 'item-title' }, title));
+        const left = Math.max(0, iv.expires_at - Date.now() / 1000);
+        const exp = left > 86400 ? Math.round(left / 86400) + ' days' : Math.max(1, Math.round(left / 3600)) + ' h';
+        main.appendChild(E('div', { class: 'item-sub' },
+          (iv.kind === 'reset' ? 'reset link' : 'new leader · up to ' + iv.max_gigs + ' gigs') +
+          '  ·  made ' + SMUI.ago(iv.created_at) + '  ·  expires in ' + exp));
+        const acts = E('div', { class: 'item-acts' });
+        acts.appendChild(btn('Revoke', async () => {
+          const ok = await SMUI.confirm('Revoke this link?', 'It stops working immediately.', 'Revoke', true);
+          if (ok && await post('/admin/api/invites/' + iv.id + '/revoke', {}, 'Link revoked')) load();
+        }, 'danger'));
         it.appendChild(main); it.appendChild(acts);
         box.appendChild(it);
       });
@@ -157,6 +184,7 @@
       if (r.status === 401) { show(false); return; }
       if (!r.ok) { SMUI.toast(r.error, true); return; }
       show(true);
+      renderPending(r.data.invites || []);
       renderLeaders(r.data.leaders);
       renderGigs(r.data.gigs);
     }
@@ -171,28 +199,24 @@
       load();
     });
 
-    document.getElementById('nl-gen').addEventListener('click', () => {
-      document.getElementById('nl-pw').value = SMUI.randomPassword();
-    });
-
-    document.getElementById('new-leader').addEventListener('submit', async (e) => {
+    document.getElementById('invite-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const err = document.getElementById('nl-err');
+      const err = document.getElementById('iv-err');
       err.textContent = '';
-      const body = {
-        username: document.getElementById('nl-user').value.trim(),
-        display_name: document.getElementById('nl-name').value.trim(),
-        password: document.getElementById('nl-pw').value,
-        max_gigs: parseInt(document.getElementById('nl-max').value, 10) || 5,
-      };
-      const r = await SMUI.api('/admin/api/leaders', body);
+      const label = document.getElementById('iv-label').value.trim();
+      const r = await SMUI.api('/admin/api/invites', {
+        label,
+        max_gigs: parseInt(document.getElementById('iv-max').value, 10) || 5,
+        days: parseInt(document.getElementById('iv-days').value, 10) || 7,
+      });
       if (r.status === 401) { show(false); return; }
       if (!r.ok) { err.textContent = r.error; return; }
-      const creds = 'Stage Messenger leader sign-in\n' + location.origin + '/login\nUsername: ' + body.username + '\nPassword: ' + body.password;
-      SMUI.alert('Leader created', creds + '\n\nCopy this now — the password isn’t shown again.', creds);
-      ['nl-user', 'nl-name', 'nl-pw'].forEach(id => { document.getElementById(id).value = ''; });
-      document.getElementById('nl-max').value = '5';
+      document.getElementById('iv-label').value = '';
+      document.getElementById('iv-max').value = '5';
       load();
+      await SMUI.linkBox('Invite link' + (label ? ' for ' + label : ''),
+        'Send this to the band leader. They create their own account with it. It works once.',
+        location.origin + r.data.path, 'Your Stage Messenger band-leader invite');
     });
 
     document.getElementById('refresh-btn').addEventListener('click', load);

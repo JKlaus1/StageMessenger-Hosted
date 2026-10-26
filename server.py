@@ -246,6 +246,11 @@ def admin_page():
     return page('admin.html')
 
 
+@app.route('/invite/<token>')
+def invite_page(token):
+    return page('invite.html')       # the page asks /api/invite/<token> whether the link is still good
+
+
 # Static assets (JS, icons). HTML pages are only reachable via the routes above.
 @app.route('/<path:fname>')
 def static_file(fname):
@@ -416,6 +421,66 @@ def api_password():
     return jsonify({'ok': True})
 
 
+# ── One-time links: leader invites and password resets ───────────────────────
+
+INVITE_DAYS_DEFAULT = 7
+RESET_TTL_S = 24 * 3600
+
+
+def _invite_gate():
+    key = 'invite-fail:' + client_ip()
+    return key, limiter.blocked(key, 20, 600)
+
+
+@app.get('/api/invite/<token>')
+def api_invite_get(token):
+    key, blocked = _invite_gate()
+    if blocked:
+        return err('Too many attempts — try again in 10 minutes.', 429)
+    inv = store.get_invite(token)
+    if not inv:
+        limiter.record(key)
+        return err('This link is no longer valid — ask for a new one.', 404)
+    out = {'kind': inv['kind'], 'label': inv['label'], 'expires_at': inv['expires_at']}
+    if inv['kind'] == 'reset':
+        out['username'] = inv.get('username', '')
+    return jsonify(out)
+
+
+@app.post('/api/invite/<token>')
+def api_invite_claim(token):
+    key, blocked = _invite_gate()
+    if blocked:
+        return err('Too many attempts — try again in 10 minutes.', 429)
+    inv = store.get_invite(token)
+    if not inv:
+        limiter.record(key)
+        return err('This link is no longer valid — ask for a new one.', 404)
+    d = jbody()
+    pw = d.get('password') if isinstance(d.get('password'), str) else ''
+    if len(pw) < MIN_PW or len(pw) > 256:
+        return err(f'Password must be at least {MIN_PW} characters.')
+    if inv['kind'] == 'leader':
+        user = sstr(d.get('username'), 32)
+        disp = sstr(d.get('display_name'), 40) or user
+        if not USERNAME_RE.match(user):
+            return err('Username: 3–32 letters, numbers, dot, dash or underscore.')
+        ld, why = store.claim_leader_invite(token, user, disp, pw)
+        if why == 'taken':
+            return err('That username is taken — pick another.', 409)
+    else:
+        ld = store.claim_reset(token, pw)
+        if ld:
+            drop_leader_controls(ld['id'])
+    if not ld:
+        return err('This link is no longer valid — ask for a new one.', 404)
+    for k in ('lid', 'lv'):
+        session.pop(k, None)
+    session['lid'], session['lv'] = ld['id'], ld['pw_version']
+    session.permanent = True
+    return jsonify({'ok': True, 'leader': leader_json(ld)})
+
+
 # ── Admin API ────────────────────────────────────────────────────────────────
 
 @app.post('/admin/api/login')
@@ -450,7 +515,49 @@ def admin_state():
         gigs.append({'id': g['id'], 'name': g['name'], 'date': g['gig_date'],
                      'leader': g['leader_username'], 'created_at': g['created_at'],
                      'last_activity': g['last_activity'], 'devices': live.device_count(g['id'])})
-    return jsonify({'leaders': store.list_leaders(), 'gigs': gigs})
+    invites = [{'id': i['id'], 'kind': i['kind'], 'label': i['label'], 'max_gigs': i['max_gigs'],
+                'leader': i['leader_username'], 'created_at': i['created_at'], 'expires_at': i['expires_at']}
+               for i in store.pending_invites()]
+    return jsonify({'leaders': store.list_leaders(), 'gigs': gigs, 'invites': invites})
+
+
+@app.post('/admin/api/invites')
+def admin_invite_create():
+    if not is_admin():
+        return err('Not signed in', 401)
+    d = jbody()
+    label = sstr(d.get('label'), 40)
+    try:
+        max_gigs = int(d.get('max_gigs') or store.DEFAULT_MAX_GIGS)
+        days = int(d.get('days') or INVITE_DAYS_DEFAULT)
+    except (TypeError, ValueError):
+        return err('max_gigs and days must be numbers')
+    if not 1 <= max_gigs <= 50:
+        return err('max_gigs must be 1–50')
+    if not 1 <= days <= 30:
+        return err('Expiry must be 1–30 days')
+    tok, inv = store.create_invite('leader', days * 86400, label=label, max_gigs=max_gigs)
+    return jsonify({'token': tok, 'path': '/invite/' + tok, 'invite': inv}), 201
+
+
+@app.post('/admin/api/invites/<int:iid>/revoke')
+def admin_invite_revoke(iid):
+    if not is_admin():
+        return err('Not signed in', 401)
+    if not store.revoke_invite(iid):
+        return err('Invite not found or already used', 404)
+    return jsonify({'ok': True})
+
+
+@app.post('/admin/api/leaders/<int:lid>/reset-link')
+def admin_reset_link(lid):
+    if not is_admin():
+        return err('Not signed in', 401)
+    ld = store.get_leader(lid)
+    if not ld:
+        return err('Leader not found', 404)
+    tok, inv = store.create_invite('reset', RESET_TTL_S, label=ld['display_name'], leader_id=lid)
+    return jsonify({'token': tok, 'path': '/invite/' + tok, 'invite': inv}), 201
 
 
 @app.post('/admin/api/leaders')

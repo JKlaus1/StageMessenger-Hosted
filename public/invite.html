@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="/pwa/control-192.png">
+  <title>Stage Messenger — Leader invite</title>
+  <link rel="stylesheet" href="/sm.css">
+  <script src="/sm-ui.js"></script>
+  <style>
+    body { display: flex; flex-direction: column; justify-content: center; }
+    .logo { font-size: 1.2rem; font-weight: 900; color: var(--green); letter-spacing: .15em; text-transform: uppercase; text-align: center; margin-bottom: .4rem; }
+    h1 { font-size: 1.1rem; font-weight: 900; text-align: center; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="logo">🎸 Stage Messenger</div>
+  <h1 id="title">Checking your link…</h1>
+
+  <div class="card hidden" id="bad">
+    <p class="note" id="bad-msg">This link is no longer valid — ask for a new one.</p>
+    <a class="btn block" href="/login" style="margin-top:.8rem">Leader sign in</a>
+  </div>
+
+  <form class="card hidden" id="f" autocomplete="on">
+    <p class="note" id="intro" style="margin-bottom:.9rem"></p>
+    <div id="new-fields">
+      <div class="field"><label for="u">Username (for signing in)</label>
+        <input type="text" id="u" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32"
+               placeholder="letters, numbers, . - _"></div>
+      <div class="field"><label for="d">Display name</label>
+        <input type="text" id="d" maxlength="40" placeholder="e.g. Mike — RDB"></div>
+    </div>
+    <div class="field"><label for="p1">Password</label>
+      <input type="password" id="p1" autocomplete="new-password" maxlength="256" placeholder="at least 8 characters"></div>
+    <div class="field"><label for="p2">Password again</label>
+      <input type="password" id="p2" autocomplete="new-password" maxlength="256"></div>
+    <div class="err" id="err"></div>
+    <button class="btn primary block" id="go" type="submit">Create my account</button>
+  </form>
+
+  <script>
+    const token = decodeURIComponent(location.pathname.split('/')[2] || '');
+    const $ = id => document.getElementById(id);
+    let kind = null;
+
+    function bad(msg) {
+      $('title').textContent = 'Link not valid';
+      $('bad-msg').textContent = msg || 'This link is no longer valid — ask for a new one.';
+      $('bad').classList.remove('hidden');
+      $('f').classList.add('hidden');
+    }
+
+    (async () => {
+      const r = await SMUI.api('/api/invite/' + encodeURIComponent(token));
+      if (!r.ok) return bad(r.status === 429 ? r.error : null);
+      kind = r.data.kind;
+      if (kind === 'reset') {
+        $('title').textContent = 'Set a new password';
+        $('intro').textContent = 'For leader account “' + r.data.username + '”. You’ll be signed out everywhere else.';
+        $('new-fields').classList.add('hidden');
+        $('go').textContent = 'Save new password';
+      } else {
+        $('title').textContent = 'You’re invited to lead gigs';
+        $('intro').textContent = 'Create your band-leader account. You’ll use it to start gigs and send the band their link.';
+        $('d').value = r.data.label || '';
+      }
+      $('f').classList.remove('hidden');
+      (kind === 'reset' ? $('p1') : $('u')).focus();
+    })();
+
+    $('f').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      $('err').textContent = '';
+      const p1 = $('p1').value, p2 = $('p2').value;
+      if (p1.length < 8) { $('err').textContent = 'Password must be at least 8 characters.'; return; }
+      if (p1 !== p2) { $('err').textContent = 'The two passwords don’t match.'; return; }
+      const body = { password: p1 };
+      if (kind === 'leader') {
+        body.username = $('u').value.trim();
+        body.display_name = $('d').value.trim();
+        if (!/^[A-Za-z0-9_.-]{3,32}$/.test(body.username)) {
+          $('err').textContent = 'Username: 3–32 letters, numbers, dot, dash or underscore.'; return;
+        }
+      }
+      $('go').disabled = true;
+      const r = await SMUI.api('/api/invite/' + encodeURIComponent(token), body);
+      $('go').disabled = false;
+      if (r.ok) { location.replace('/dashboard'); return; }
+      if (r.status === 404) return bad();
+      $('err').textContent = r.error;
+    });
+  </script>
+</body>
+</html>

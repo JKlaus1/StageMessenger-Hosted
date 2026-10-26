@@ -3,6 +3,7 @@
 Live state (who is connected, message logs) is NOT here — see live.py.
 One connection per call, WAL mode; traffic is tiny (a few writes per gig).
 """
+import hashlib
 import os
 import secrets
 import sqlite3
@@ -48,6 +49,18 @@ CREATE TABLE IF NOT EXISTS gigs (
   end_reason     TEXT
 );
 CREATE INDEX IF NOT EXISTS gigs_leader ON gigs(leader_id, ended_at);
+CREATE TABLE IF NOT EXISTS invites (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash  TEXT NOT NULL UNIQUE,           -- sha256 of the link token; the token itself is never stored
+  kind        TEXT NOT NULL,                  -- 'leader' (new account) | 'reset' (new password)
+  label       TEXT NOT NULL DEFAULT '',
+  max_gigs    INTEGER NOT NULL DEFAULT 5,
+  leader_id   INTEGER REFERENCES leaders(id), -- reset: whose password; leader: the account it created
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  used_at     INTEGER,
+  revoked_at  INTEGER
+);
 """
 
 
@@ -253,6 +266,123 @@ def touch_gig(gig_id):
         c.execute("UPDATE gigs SET last_activity=? WHERE id=?", (now(), gig_id))
 
 
+# ── One-time links (leader invites, password resets) ─────────────────────────
+
+INVITE_RETAIN_S = 30 * 86400
+
+
+def _hash(token):
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+
+def create_invite(kind, ttl_s, label='', max_gigs=DEFAULT_MAX_GIGS, leader_id=None):
+    """-> (raw token, invite dict). Only the hash is stored. A new reset revokes older ones."""
+    tok, t = new_token(), now()
+    with _lock, _db() as c:
+        if kind == 'reset':
+            c.execute("UPDATE invites SET revoked_at=? WHERE kind='reset' AND leader_id=? "
+                      "AND used_at IS NULL AND revoked_at IS NULL", (t, leader_id))
+        cur = c.execute("INSERT INTO invites(token_hash,kind,label,max_gigs,leader_id,created_at,expires_at) "
+                        "VALUES(?,?,?,?,?,?,?)", (_hash(tok), kind, label, max_gigs, leader_id, t, t + ttl_s))
+        row = c.execute("SELECT * FROM invites WHERE id=?", (cur.lastrowid,)).fetchone()
+    return tok, _invite_dict(row)
+
+
+def _invite_dict(r):
+    return {k: r[k] for k in r.keys() if k != 'token_hash'} if r else None
+
+
+def _active(c, token):
+    if not token or len(token) > 64:
+        return None
+    return c.execute("SELECT * FROM invites WHERE token_hash=? AND used_at IS NULL AND revoked_at IS NULL "
+                     "AND expires_at > ?", (_hash(token), now())).fetchone()
+
+
+def get_invite(token):
+    """Active (unused, unrevoked, unexpired) invite for a link token, or None."""
+    with _db() as c:
+        r = _active(c, token)
+        if not r:
+            return None
+        d = _invite_dict(r)
+        if d['kind'] == 'reset':
+            ld = c.execute("SELECT username, display_name FROM leaders WHERE id=?", (d['leader_id'],)).fetchone()
+            d['username'] = ld['username'] if ld else ''
+        return d
+
+
+def pending_invites():
+    with _db() as c:
+        rows = c.execute("SELECT i.*, l.username AS leader_username FROM invites i "
+                         "LEFT JOIN leaders l ON l.id=i.leader_id "
+                         "WHERE i.used_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > ? "
+                         "ORDER BY i.created_at DESC", (now(),)).fetchall()
+    out = []
+    for r in rows:
+        d = _invite_dict(r)
+        d['leader_username'] = r['leader_username']
+        out.append(d)
+    return out
+
+
+def revoke_invite(invite_id):
+    with _lock, _db() as c:
+        cur = c.execute("UPDATE invites SET revoked_at=? WHERE id=? AND used_at IS NULL AND revoked_at IS NULL",
+                        (now(), invite_id))
+        return cur.rowcount > 0
+
+
+def claim_leader_invite(token, username, display_name, password):
+    """Atomically burns a leader invite and creates the account.
+    -> (leader dict, None) or (None, 'invalid' | 'taken')."""
+    with _lock, _db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        try:
+            inv = _active(c, token)
+            if not inv or inv['kind'] != 'leader':
+                c.execute('ROLLBACK')
+                return None, 'invalid'
+            try:
+                cur = c.execute("INSERT INTO leaders(username,display_name,pw_hash,max_gigs,created_at) "
+                                "VALUES(?,?,?,?,?)", (username, display_name, generate_password_hash(password),
+                                                      inv['max_gigs'], now()))
+            except sqlite3.IntegrityError:
+                c.execute('ROLLBACK')
+                return None, 'taken'
+            lid = cur.lastrowid
+            done = c.execute("UPDATE invites SET used_at=?, leader_id=? WHERE id=? AND used_at IS NULL",
+                             (now(), lid, inv['id']))
+            if done.rowcount != 1:
+                c.execute('ROLLBACK')
+                return None, 'invalid'
+            c.execute('COMMIT')
+        except Exception:
+            c.execute('ROLLBACK')
+            raise
+        return get_leader(lid, c), None
+
+
+def claim_reset(token, password):
+    """Atomically burns a reset link and sets the new password (logs out every session).
+    -> leader dict or None."""
+    with _lock, _db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        try:
+            inv = _active(c, token)
+            if not inv or inv['kind'] != 'reset':
+                c.execute('ROLLBACK')
+                return None
+            c.execute("UPDATE leaders SET pw_hash=?, pw_version=pw_version+1 WHERE id=?",
+                      (generate_password_hash(password), inv['leader_id']))
+            c.execute("UPDATE invites SET used_at=? WHERE id=?", (now(), inv['id']))
+            c.execute('COMMIT')
+        except Exception:
+            c.execute('ROLLBACK')
+            raise
+        return get_leader(inv['leader_id'], c)
+
+
 def expire_idle_gigs():
     """Ends gigs idle past the limit and purges long-ended ones. Returns ids just ended."""
     t = now()
@@ -264,4 +394,5 @@ def expire_idle_gigs():
             c.executemany("UPDATE gigs SET ended_at=?, end_reason='expired' WHERE id=?",
                           [(t, i) for i in ids])
         c.execute("DELETE FROM gigs WHERE ended_at IS NOT NULL AND ended_at < ?", (t - ENDED_RETAIN_S,))
+        c.execute("DELETE FROM invites WHERE COALESCE(used_at, revoked_at, expires_at) < ?", (t - INVITE_RETAIN_S,))
     return ids

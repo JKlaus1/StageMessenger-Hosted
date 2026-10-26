@@ -20,7 +20,12 @@
     '.smu-toast{position:fixed;left:50%;bottom:1.5rem;transform:translateX(-50%);z-index:2600;background:#00ff88;color:#000;' +
     'padding:.6rem 1.1rem;border-radius:999px;font-weight:800;font-size:.75rem;letter-spacing:.08em;' +
     "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;box-shadow:0 4px 20px rgba(0,0,0,.4)}" +
-    '.smu-toast.err{background:#cc2233;color:#fff}';
+    '.smu-toast.err{background:#cc2233;color:#fff}' +
+    '.smu-link{font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all;font-size:.75rem;color:#00ff88;' +
+    'background:#0d0d1a;border:1px solid #2a2a4a;border-radius:10px;padding:.7rem .85rem;margin-bottom:.75rem;user-select:all}' +
+    '.smu-qr{text-align:center;margin-bottom:.75rem}' +
+    '.smu-qr > div{display:inline-block;background:#fff;padding:10px;border-radius:12px;line-height:0}' +
+    '.smu-row.smu-wrap{flex-wrap:wrap}';
 
   function injectCss() {
     if (document.getElementById('smu-css')) return;
@@ -112,6 +117,33 @@
     });
   }
 
+  // One-time link dialog: the link, Copy / Share / QR, Done.
+  function linkBox(title, body, url, shareText) {
+    injectCss();
+    return new Promise(function (resolve) {
+      var back = el('div', { class: 'smu-back' });
+      var box = el('div', { class: 'smu-box', role: 'dialog', 'aria-modal': 'true' });
+      box.appendChild(el('h2', null, title));
+      if (body) box.appendChild(el('p', null, body));
+      box.appendChild(el('div', { class: 'smu-link' }, url));
+      var qrWrap = el('div', { class: 'smu-qr' }); var qrIn = el('div'); qrWrap.appendChild(qrIn);
+      qrWrap.style.display = 'none';
+      box.appendChild(qrWrap);
+      var row = el('div', { class: 'smu-row smu-wrap' });
+      row.appendChild(el('button', { onclick: function () { copyText(url); } }, 'Copy'));
+      row.appendChild(el('button', { onclick: function () { shareLink(url, 'Stage Messenger', shareText || title); } }, 'Share'));
+      row.appendChild(el('button', { onclick: function () {
+        var show = qrWrap.style.display === 'none';
+        qrWrap.style.display = show ? 'block' : 'none';
+        if (show && !qrIn.firstChild) qr(qrIn, url, 200);
+      } }, 'QR'));
+      row.appendChild(el('button', { class: 'smu-ok', onclick: function () { back.remove(); resolve(); } }, 'Done'));
+      box.appendChild(row);
+      back.appendChild(box);
+      document.body.appendChild(back);
+    });
+  }
+
   // ── Toast / copy / share / QR ────────────────────────────────────────────
   var toastTimer = null;
   function toast(msg, isErr) {
@@ -184,6 +216,6 @@
     return location.origin + '/g/' + encodeURIComponent(token) + '?name=' + encodeURIComponent(name) + '&role=sender';
   }
 
-  window.SMUI = { senderName: senderName, senderUrl: senderUrl, api: api, el: el, confirm: confirmBox, prompt: promptBox, alert: alertBox, toast: toast,
+  window.SMUI = { linkBox: linkBox, senderName: senderName, senderUrl: senderUrl, api: api, el: el, confirm: confirmBox, prompt: promptBox, alert: alertBox, toast: toast,
                   copy: copyText, share: shareLink, qr: qr, randomPassword: randomPassword, ago: fmtAgo };
 })();

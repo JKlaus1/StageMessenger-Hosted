@@ -259,4 +259,80 @@ r = anon.get('/sm-ui.js?v=000000000000')
 check(r.headers.get('Cache-Control') == 'no-cache', 'stale version tag is not cached as immutable')
 check(anon.get('/login').headers.get('Cache-Control') == 'no-cache', 'pages stay no-cache')
 
+# ── One-time invite links ────────────────────────────────────────────────────
+import threading as _th
+live.limiter._hits.clear()
+check(post(anon, '/admin/api/invites', {'label': 'Mike'}).status_code == 401, 'invite creation needs admin')
+r = post(admin, '/admin/api/invites', {'label': 'Mike — RDB', 'max_gigs': 3, 'days': 7})
+check(r.status_code == 201 and r.get_json()['path'].startswith('/invite/'), 'admin creates an invite link')
+itok = r.get_json()['token']
+check(len(itok) >= 22, 'invite token is 128-bit')
+with open(store.DB_PATH, 'rb') as f:
+    raw = f.read()
+for ext in ('-wal',):
+    try:
+        raw += open(store.DB_PATH + ext, 'rb').read()
+    except OSError:
+        pass
+check(itok.encode() not in raw, 'raw invite token is not stored in the database (hash only)')
+st = admin.get('/admin/api/state').get_json()
+check(any(i['label'] == 'Mike — RDB' and i['kind'] == 'leader' for i in st['invites']), 'pending invite listed for admin')
+g = anon.get('/api/invite/' + itok).get_json()
+check(g['kind'] == 'leader' and g['label'] == 'Mike — RDB', 'invite page sees kind + label')
+check(anon.get('/invite/' + itok).status_code == 200, 'invite page served')
+mike = app.test_client()
+check(post(mike, '/api/invite/' + itok, {'username': 'mike', 'password': 'short'}).status_code == 400, 'short password refused')
+check(post(mike, '/api/invite/' + itok, {'username': 'bob', 'password': 'mikepass12'}).status_code == 409, 'taken username refused')
+check(anon.get('/api/invite/' + itok).status_code == 200, 'invite still valid after a refused attempt')
+r = post(mike, '/api/invite/' + itok, {'username': 'mike', 'display_name': 'Mike — RDB', 'password': 'mikepass12'})
+check(r.status_code == 200 and mike.get('/api/me').get_json()['leader']['username'] == 'mike', 'claim creates the account and signs in')
+check(mike.get('/api/gigs').get_json()['max_gigs'] == 3, 'max gigs from the invite applied')
+check(anon.get('/api/invite/' + itok).status_code == 404, 'used invite is dead')
+check(post(app.test_client(), '/api/invite/' + itok, {'username': 'mike2', 'password': 'mikepass12'}).status_code == 404, 'used invite cannot create a second account')
+check(not any(i['label'] == 'Mike — RDB' for i in admin.get('/admin/api/state').get_json()['invites']), 'used invite leaves the pending list')
+
+# race: two people tap the same link at once -> exactly one account
+rtok = post(admin, '/admin/api/invites', {'label': 'race'}).get_json()['token']
+res = []
+def _claim(u):
+    res.append(store.claim_leader_invite(rtok, u, u, 'racepass12'))
+ts = [_th.Thread(target=_claim, args=(f'racer{i}',)) for i in range(6)]
+[t.start() for t in ts]; [t.join() for t in ts]
+check(sum(1 for ld, why in res if ld) == 1 and all(why == 'invalid' for ld, why in res if not ld), 'concurrent claims: exactly one wins')
+
+# revoke + expiry
+vtok, vinv = store.create_invite('leader', 86400, label='revoke-me')
+check(post(admin, f"/admin/api/invites/{vinv['id']}/revoke").status_code == 200 and anon.get('/api/invite/' + vtok).status_code == 404, 'revoked invite is dead')
+etok, einv = store.create_invite('leader', 86400, label='old')
+with store._db() as c:
+    c.execute('UPDATE invites SET expires_at=1 WHERE id=?', (einv['id'],))
+check(anon.get('/api/invite/' + etok).status_code == 404, 'expired invite is dead')
+check(post(admin, '/admin/api/invites', {'days': 99}).status_code == 400, 'expiry limited to 30 days')
+
+# password reset link
+mike_id = mike.get('/api/me').get_json()['leader']['id']
+old_session = app.test_client()
+post(old_session, '/api/login', {'username': 'mike', 'password': 'mikepass12'})
+r1 = post(admin, f'/admin/api/leaders/{mike_id}/reset-link').get_json()['token']
+r2 = post(admin, f'/admin/api/leaders/{mike_id}/reset-link').get_json()['token']
+check(anon.get('/api/invite/' + r1).status_code == 404, 'a newer reset link revokes the older one')
+g = anon.get('/api/invite/' + r2).get_json()
+check(g['kind'] == 'reset' and g['username'] == 'mike', 'reset page sees whose account')
+check(post(app.test_client(), '/api/login', {'username': 'mike', 'password': 'mikepass12'}).status_code == 200, 'old password works until the reset is used')
+rc = app.test_client()
+check(post(rc, '/api/invite/' + r2, {'password': 'newpass1234'}).status_code == 200, 'reset link sets the new password')
+check(old_session.get('/api/gigs').status_code == 401 and mike.get('/api/gigs').status_code == 401, 'reset signs out every other session')
+check(rc.get('/api/gigs').status_code == 200, 'reset signs in the browser that used it')
+check(post(app.test_client(), '/api/login', {'username': 'mike', 'password': 'newpass1234'}).status_code == 200, 'new password works')
+check(post(app.test_client(), '/api/invite/' + r2, {'password': 'another12345'}).status_code == 404, 'reset link works once')
+check(post(app.test_client(), '/api/invite/' + rtok, {'password': 'x' * 12}).status_code == 404, 'a used leader invite cannot be used as a reset')
+
+# brute force on links
+live.limiter._hits.clear()
+for _ in range(20):
+    anon.get('/api/invite/' + os.urandom(12).hex())
+ntok = post(admin, '/admin/api/invites', {}).get_json()['token']
+check(anon.get('/api/invite/' + ntok).status_code == 429, 'after 20 bad links from one IP, link checks are throttled')
+live.limiter._hits.clear()
+
 print(f'\nALL {PASSED} CHECKS PASSED')

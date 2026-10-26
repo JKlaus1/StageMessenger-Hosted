@@ -9,7 +9,7 @@ Separate from the Pi build (`JKlaus1/StageMessenger`), which is unchanged.
 | Role | Where | How they get in |
 |---|---|---|
 | Admin (Joseph) | `/admin` | Password set on the server with `manage.py`; Cloudflare Access in front |
-| Leader | `/login` → `/dashboard` | Account created by the admin. Creates gigs (cap per leader, default 5) |
+| Leader | `/invite/<token>` once, then `/login` → `/dashboard` | One-time invite link from the admin (default 7 days); they pick their own username + password. Creates gigs (cap set on the invite, default 5). Password resets are one-time links too (24 h) |
 | Member | `/g/<join token>` | The gig's join link. Registers a name, unique within that gig only |
 | Stage display | `/g/<join token>/display?monitor=N&name=STAGE+L` | Same link plus monitor number |
 | Control | `/c/<gig id>` | The leader's signed-in session only, never a URL alone |
@@ -52,7 +52,7 @@ public/     landing, login, dashboard (leader), admin, messenger (member), displ
             sm-ui.js (API + in-page dialogs, copy/share/QR), sm-links.js (named + display links), sm.css
             socket.io 4.7.5 client, qrcode, PWA icons
 deploy/     docker-compose.yml (copied to ~/services/stage-messenger/) and setup.sh
-tests/      test_isolation.py (78), test_live_server.py (14, real WebSockets), test_browser.py (25, headless Chromium)
+tests/      test_isolation.py (112), test_live_server.py (14, real WebSockets), test_browser.py (27, headless Chromium)
 ```
 
 ## Server (see the home-server access handoff)
@@ -86,7 +86,7 @@ python3 tests/test_browser.py [screenshot_dir]     # needs playwright + chromium
 ```
 
 `test_browser.py` walks the whole flow:
-1. Admin creates a leader.
+1. Admin makes a one-time invite; the leader creates their own account from it.
 2. The leader signs in and creates and shares a gig.
 3. A phone joins as sender, a stage display joins, and a named link auto-joins.
 4. Control sends to all; the phone sends song + key.
