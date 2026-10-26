@@ -1,0 +1,27 @@
+# Copied to ~/services/stage-messenger/docker-compose.yml by deploy/setup.sh.
+# Reached only through Caddy (caddy_default network) and the existing Cloudflare tunnel.
+# No host ports are published.
+services:
+  stage-messenger:
+    build: ../../src/StageMessenger-Hosted
+    image: stage-messenger:local
+    container_name: stage-messenger
+    restart: unless-stopped
+    user: "1000:1000"
+    env_file: /etc/stage-messenger/env        # SECRET_KEY (chmod 600, never in git)
+    environment:
+      - PUBLIC_URL=https://stage-messenger.com
+      - SM_DATA=/data
+    volumes:
+      - ./data:/data                          # SQLite: admin, leaders, gigs
+    networks:
+      - caddy_default
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  caddy_default:
+    external: true
