@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# netwatch — self-heal a stalled Ethernet link on the home server (installed as /usr/local/sbin/netwatch).
+#
+# Why: on 2026-11-01 the Intel I226-V (igc) on enp2s0 stopped passing traffic while the link
+# still showed "up". DHCP renewal failed, the lease expired, the box fell back to 169.254.x.x
+# and everything behind the Cloudflare tunnel was offline for 6 days, until the switch port was
+# bounced. This does that bounce automatically.
+#
+#   netwatch check    (run by netwatch.timer every 2 min) one health check; recover after
+#                     FAILS_BEFORE_RESET consecutive failures
+#   netwatch status   human-readable state
+#   netwatch reset    force a link reset now
+#   netwatch probe    one health check that changes nothing (exit 0 = healthy)
+#
+# Healthy = enp2s0 has a real IPv4 address (not 169.254.x.x) AND the gateway or 1.1.1.1 answers ping.
+# Recovery = ip link down/up on enp2s0 (resets the igc hardware, same as toggling the switch port),
+# then a dhcpcd rebind if no lease comes back. Never touches Docker, Caddy or cloudflared.
+set -u
+
+CONF=${NETWATCH_CONF:-/etc/default/netwatch}
+IFACE=enp2s0
+GW_FALLBACK=192.168.1.2
+PROBE=1.1.1.1
+FAILS_BEFORE_RESET=3
+MIN_RESET_GAP=600          # seconds between automatic resets (no flapping)
+# shellcheck source=/dev/null
+[ -r "$CONF" ] && . "$CONF"
+
+RUN=${NETWATCH_RUN:-/run/netwatch}
+STATE=${NETWATCH_STATE:-/var/lib/netwatch}
+mkdir -p "$RUN" "$STATE"
+
+log() { logger -t netwatch -- "$*"; echo "$*"; }
+now() { date +%s; }
+
+real_addr() {   # first global IPv4 on IFACE that isn't link-local
+  ip -4 -o addr show dev "$IFACE" scope global 2>/dev/null \
+    | awk '{print $4}' | grep -v '^169\.254\.' | head -n1
+}
+
+gateway() {
+  local gw
+  gw=$(ip -4 route show default dev "$IFACE" 2>/dev/null | awk '{print $3; exit}')
+  echo "${gw:-$GW_FALLBACK}"
+}
+
+reachable() { ping -n -q -c 1 -W 2 -I "$IFACE" "$1" >/dev/null 2>&1; }
+
+healthy() {      # prints a one-line reason, returns 0 when healthy
+  local addr gw
+  addr=$(real_addr)
+  if [ -z "$addr" ]; then echo "no IPv4 lease on $IFACE (link-local only)"; return 1; fi
+  gw=$(gateway)
+  if reachable "$gw"; then echo "ok $addr, gateway $gw answers"; return 0; fi
+  if reachable "$PROBE"; then echo "ok $addr, $PROBE answers (gateway $gw silent)"; return 0; fi
+  echo "$addr but neither gateway $gw nor $PROBE answers"
+  return 1
+}
+
+reset_link() {
+  local why=$1 i
+  log "RECOVERY: resetting $IFACE ($why)"
+  now > "$STATE/last_reset"
+  echo "$(date -Is) $why" >> "$STATE/resets.log"
+  ip link set "$IFACE" down
+  sleep 5
+  ip link set "$IFACE" up
+  for i in $(seq 1 12); do            # up to ~60 s for carrier, DHCP and traffic
+    sleep 5
+    healthy >/dev/null && break
+    # no lease after ~30 s: nudge dhcpcd (rebind; starts it if it isn't running)
+    if [ "$i" -eq 6 ] && [ -z "$(real_addr)" ]; then dhcpcd -n "$IFACE" >/dev/null 2>&1; fi
+  done
+  if msg=$(healthy); then log "RECOVERY OK: $msg"; echo 0 > "$RUN/fails"
+  else log "RECOVERY did not restore traffic yet: $msg (will retry after ${MIN_RESET_GAP}s)"
+  fi
+}
+
+cmd_check() {
+  local fails msg last gap
+  fails=$(cat "$RUN/fails" 2>/dev/null || echo 0)
+  if msg=$(healthy); then
+    [ "$fails" -gt 0 ] && log "healthy again after $fails failed check(s): $msg"
+    echo 0 > "$RUN/fails"
+    return 0
+  fi
+  fails=$((fails + 1))
+  echo "$fails" > "$RUN/fails"
+  log "check failed ($fails/$FAILS_BEFORE_RESET): $msg"
+  [ "$fails" -lt "$FAILS_BEFORE_RESET" ] && return 1
+  last=$(cat "$STATE/last_reset" 2>/dev/null || echo 0)
+  gap=$(( $(now) - last ))
+  if [ "$gap" -lt "$MIN_RESET_GAP" ]; then
+    log "waiting before another reset ($gap s since the last, minimum $MIN_RESET_GAP s)"
+    return 1
+  fi
+  reset_link "$msg"
+  return 1
+}
+
+cmd_status() {
+  local msg last
+  if msg=$(healthy); then echo "network:     HEALTHY — $msg"; else echo "network:     FAILING — $msg"; fi
+  echo "fail count:  $(cat "$RUN/fails" 2>/dev/null || echo 0)/$FAILS_BEFORE_RESET"
+  last=$(cat "$STATE/last_reset" 2>/dev/null || echo 0)
+  if [ "$last" -gt 0 ]; then echo "last reset:  $(date -d "@$last" '+%F %T %Z')"; else echo "last reset:  never"; fi
+  local n=0
+  [ -f "$STATE/resets.log" ] && n=$(wc -l < "$STATE/resets.log")
+  echo "resets:      $n total (log: $STATE/resets.log)"
+  if command -v ethtool >/dev/null; then
+    echo "EEE:         $(ethtool --show-eee "$IFACE" 2>/dev/null | awk -F': *' '/EEE status/{print $2; exit}')"
+  fi
+  echo "timer:       $(systemctl is-active netwatch.timer 2>/dev/null) / next $(systemctl show netwatch.timer -p NextElapseUSecRealtime --value 2>/dev/null)"
+}
+
+case "${1:-check}" in
+  check)  cmd_check ;;
+  status) cmd_status ;;
+  reset)  reset_link "manual reset" ;;
+  probe)  healthy ;;
+  *) echo "usage: netwatch [check|status|reset|probe]"; exit 2 ;;
+esac

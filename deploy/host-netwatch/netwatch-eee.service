@@ -1,0 +1,13 @@
+[Unit]
+Description=Disable Energy-Efficient Ethernet on enp2s0 (Intel I226-V stall workaround)
+After=sys-subsystem-net-devices-enp2s0.device
+BindsTo=sys-subsystem-net-devices-enp2s0.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# '-' : an 'already off' error is not a failure
+ExecStart=-/usr/sbin/ethtool --set-eee enp2s0 eee off
+
+[Install]
+WantedBy=sys-subsystem-net-devices-enp2s0.device

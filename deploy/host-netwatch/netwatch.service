@@ -1,0 +1,10 @@
+[Unit]
+Description=netwatch: check enp2s0 traffic, reset the link if it stalls
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/netwatch check
+# A failed check is normal operation, not a unit failure.
+SuccessExitStatus=1
