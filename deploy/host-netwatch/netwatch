@@ -110,7 +110,7 @@ cmd_status() {
   if command -v ethtool >/dev/null; then
     echo "EEE:         $(ethtool --show-eee "$IFACE" 2>/dev/null | awk -F': *' '/EEE status/{print $2; exit}')"
   fi
-  echo "timer:       $(systemctl is-active netwatch.timer 2>/dev/null) / next $(systemctl show netwatch.timer -p NextElapseUSecRealtime --value 2>/dev/null)"
+  echo "timer:       $(systemctl is-active netwatch.timer 2>/dev/null), last check $(systemctl show netwatch.timer -p LastTriggerUSec --value 2>/dev/null)"
 }
 
 case "${1:-check}" in

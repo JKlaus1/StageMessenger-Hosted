@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install / update netwatch + EEE-off on the home server. Idempotent; run with sudo.
 #   ssh -t joseph@192.168.1.121 'cd ~/src/StageMessenger-Hosted && git pull -q && sudo bash deploy/host-netwatch/install.sh'
-# Changes only: /usr/local/sbin/netwatch, /etc/default/netwatch (created once),
+# Changes only: /usr/local/sbin/netwatch (+ /usr/local/bin symlink), /etc/default/netwatch (created once),
 # netwatch.{service,timer}, netwatch-eee.service, and installs ethtool + ping if missing.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -27,6 +27,7 @@ else
 fi
 
 install -m 0755 "$HERE/netwatch" /usr/local/sbin/netwatch
+ln -sfn /usr/local/sbin/netwatch /usr/local/bin/netwatch     # so plain `netwatch status` works for non-root users
 for u in netwatch.service netwatch.timer netwatch-eee.service; do
   install -m 0644 "$HERE/$u" "/etc/systemd/system/$u"
 done
