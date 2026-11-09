@@ -395,7 +395,7 @@
     #sender-send-btn.busy,   #song-send-btn.busy   { opacity: 0.75; }
 
     /* ── Stays-up-for picker ── */
-    .dur-row { display: flex; gap: 0.35rem; margin-bottom: 1rem; }
+    .dur-row { display: flex; gap: 0.35rem; margin-bottom: 1.5rem; }
     .dur-btn {
       flex: 1; padding: 0.6rem 0; background: #14142a; border: 1px solid #2a2a4a; border-radius: 10px;
       color: #55557a; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.04em; text-align: center;
@@ -632,15 +632,6 @@
 
     <div id="online-count">No other devices connected</div>
 
-    <div class="s-label">Stays up for</div>
-    <div class="dur-row" id="dur-row">
-      <div class="dur-btn" data-dur="10000">10s</div>
-      <div class="dur-btn" data-dur="20000">20s</div>
-      <div class="dur-btn" data-dur="30000">30s</div>
-      <div class="dur-btn" data-dur="60000">1 min</div>
-      <div class="dur-btn" data-dur="0">∞<small>until dismissed</small></div>
-    </div>
-
     <div class="s-label">Next Song</div>
     <div class="sender-input-wrap">
       <input type="text" id="song-input"
@@ -692,6 +683,16 @@
       <button id="clear-sender-msg-btn" style="background:transparent;border:none;color:var(--muted);font-size:0.65rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;padding:0.15rem 0.5rem;-webkit-tap-highlight-color:transparent;">✕ Clear</button>
     </div>
     <button id="sender-send-btn">Send Message</button>
+
+    <!-- How long sent messages stay up (applies to songs and messages; rarely changed) -->
+    <div class="s-label" style="margin-top:1.5rem">Messages stay up for</div>
+    <div class="dur-row" id="dur-row">
+      <div class="dur-btn" data-dur="10000">10s</div>
+      <div class="dur-btn" data-dur="20000">20s</div>
+      <div class="dur-btn" data-dur="30000">30s</div>
+      <div class="dur-btn" data-dur="60000">1 min</div>
+      <div class="dur-btn" data-dur="0">∞<small>until dismissed</small></div>
+    </div>
 
   </div>
 
