@@ -38,6 +38,10 @@ Separate from the Pi build (`JKlaus1/StageMessenger`), which is unchanged.
   - `Referrer-Policy: no-referrer`, so tokens never leak via Referer;
   - no access log, since paths contain tokens;
   - Socket.IO accepts only the `PUBLIC_URL` origin.
+- **Sends have receipts.** Every message carries an id and the server acks it. The button shows Sent ✓ only on that
+  ack. With no ack in 4 s (a dead link that still looks connected), the page reconnects, re-registers and resends
+  once; a repeated id is never shown twice. Taps while offline queue for up to 20 s. One connection's events are
+  handled in order (`async_handlers=False`), and pings run every 10 s with a 10 s timeout, so dead links are found in ~20 s.
 - Live state (connections, message logs) is in memory, as on the Pi. A restart drops connections; clients reconnect.
 
 ## Layout
@@ -52,7 +56,7 @@ public/     landing, login, dashboard (leader), admin, messenger (member), displ
             sm-ui.js (API + in-page dialogs, copy/share/QR), sm-links.js (named + display links), sm.css
             socket.io 4.7.5 client, qrcode, PWA icons
 deploy/     docker-compose.yml (copied to ~/services/stage-messenger/) and setup.sh
-tests/      test_isolation.py (112), test_live_server.py (14, real WebSockets), test_browser.py (27, headless Chromium)
+tests/      test_isolation.py (126), test_live_server.py (14, real WebSockets), test_browser.py (38, headless Chromium)
 ```
 
 ## Server (see the home-server access handoff)

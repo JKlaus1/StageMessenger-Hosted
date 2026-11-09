@@ -65,8 +65,11 @@ def _allowed_origins():
     return origins or None          # None = python-engineio same-origin check
 
 
+# async_handlers=False: one client's events run in order (a send can't overtake its own register).
+# ping 10 s / timeout 10 s: a dead phone connection is noticed in ~20 s instead of ~45 s.
 socketio = SocketIO(app, async_mode='threading', cors_allowed_origins=_allowed_origins(),
-                    max_http_buffer_size=64 * 1024)
+                    max_http_buffer_size=64 * 1024, async_handlers=False,
+                    ping_interval=10, ping_timeout=10)
 
 store.init()
 
@@ -844,18 +847,27 @@ def on_register(data):
 
 def sender_ctx():
     """(ctx, sender name or 'Operator', is_control) if the caller may send, else None."""
+    s, _ = sender_check()
+    return s
+
+
+def sender_check():
+    """-> ((ctx, name, is_control), None) or (None, reason). Reasons the page can act on:
+    'not-registered' (re-register and resend), 'not-allowed' (receive-only device)."""
     c = control_ctx()
     if c:
-        return c, 'Operator', True
+        return (c, 'Operator', True), None
     c = ctx()
     if not c or c['kind'] != 'member':
-        return None
+        return None, 'not-registered'
     with LOCK:
         g = live.get(c['gid'])
         d = g.devices.get(request.sid) if g else None
-    if not d or not d['canSend']:
-        return None
-    return c, d['name'], False
+    if not d:
+        return None, 'not-registered'
+    if not d['canSend']:
+        return None, 'not-allowed'
+    return (c, d['name'], False), None
 
 
 def map_targets(gid, targets):
@@ -871,16 +883,25 @@ def map_targets(gid, targets):
 
 @socketio.on('send-message')
 def on_send_message(data):
-    s = sender_ctx()
+    """Returns a receipt (Socket.IO ack): {'ok': True} once delivered, or {'ok': False, 'reason': ...}.
+    A client id ('id') makes resends safe: an id already delivered in this gig is acked, not re-shown."""
+    s, why = sender_check()
     if not s:
-        return
+        return {'ok': False, 'reason': why}
     c, frm, is_control = s
-    if not limiter.hit('msg:' + request.sid, 30, 10):
-        return emit('send-rejected', {'reason': 'Slow down — too many messages.'})
     data = data if isinstance(data, dict) else {}
+    mid = data.get('id') if isinstance(data.get('id'), str) and len(data['id']) <= 64 else ''
+    if mid:
+        with LOCK:
+            g = live.get(c['gid'])
+            if g and mid in g.recent_ids:
+                return {'ok': True, 'duplicate': True}
+    if not limiter.hit('msg:' + request.sid, 30, 10):
+        emit('send-rejected', {'reason': 'Slow down — too many messages.'})
+        return {'ok': False, 'reason': 'rate'}
     message = sstr(data.get('message'), 500)
     if not message:
-        return
+        return {'ok': False, 'reason': 'empty'}
     color = data.get('color') if isinstance(data.get('color'), str) and COLOR_RE.match(data['color']) else '#cc0000'
     try:
         duration = max(1000, min(86400000, int(data.get('duration', 30000))))
@@ -888,7 +909,13 @@ def on_send_message(data):
         duration = 30000
     targets, rooms = map_targets(c['gid'], data.get('targets'))
     if not rooms:
-        return
+        return {'ok': False, 'reason': 'no-target'}
+    with LOCK:
+        g = live.get(c['gid'])
+        if not g:
+            return {'ok': False, 'reason': 'gig'}
+        if g.seen(mid):
+            return {'ok': True, 'duplicate': True}
     payload = {'message': message, 'subtitle': sstr(data.get('subtitle'), 200),
                'color': color, 'duration': duration, 'from': frm}
     for r in rooms:
@@ -898,10 +925,11 @@ def on_send_message(data):
     with LOCK:
         g = live.get(c['gid'])
         if not g:
-            return
+            return {'ok': True}          # delivered; the gig ended a moment later
         entry = g.append_log('sent' if is_control else 'incoming', frm, message, targets, color)
         touch(g)
     socketio.emit('log-entry', entry, to=ctl)
+    return {'ok': True}
 
 
 @socketio.on('clear')

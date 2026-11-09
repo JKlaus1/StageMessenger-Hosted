@@ -6,7 +6,7 @@ All access goes through LOCK.
 """
 import threading
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 
 LOCK    = threading.RLock()
 LOG_CAP = 500
@@ -18,7 +18,7 @@ def room(gid, suffix):
 
 
 class GigLive:
-    __slots__ = ('gid', 'devices', 'names', 'controls', 'log', 'seq',
+    __slots__ = ('gid', 'devices', 'names', 'controls', 'log', 'seq', 'recent_ids',
                  'device_tokens', 'last_touch')
 
     def __init__(self, gid):
@@ -30,6 +30,18 @@ class GigLive:
         self.seq           = 0
         self.device_tokens = {}      # device token -> NAME (rejoin credential, revoked on kick)
         self.last_touch    = 0.0
+        self.recent_ids    = OrderedDict()   # client message ids already delivered (resend dedupe)
+
+    def seen(self, mid):
+        """True if this message id was already delivered; otherwise remembers it."""
+        if not mid:
+            return False
+        if mid in self.recent_ids:
+            return True
+        self.recent_ids[mid] = 1
+        while len(self.recent_ids) > 500:
+            self.recent_ids.popitem(last=False)
+        return False
 
     def append_log(self, kind, frm, message, targets, color):
         self.seq += 1

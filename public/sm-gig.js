@@ -120,5 +120,92 @@
     return socket;
   }
 
-  window.SMGig = { member: member, control: control, tokenFromPath: tokenFromPath, showDead: showDead };
+  // ── Reliable send ────────────────────────────────────────────────────────
+  // sender(socket, isReady) -> { send(payload, onState), flush(), reset() }
+  //   isReady(): socket connected AND (for phones) registered with the server.
+  //   onState(state, reason): 'sending' | 'queued' | 'retrying' | 'sent' | 'failed'.
+  // Every message carries an id; the server acks it ({ok:true}) and ignores a repeat id, so
+  // a resend after a lost ack can never show twice. No ack in 4 s = dead link: force a fresh
+  // connection (the page re-registers), then resend once. Offline taps queue for up to 20 s.
+  var ACK_MS = 4000, QUEUE_MS = 20000, MAX_TRIES = 2;
+  var RETRYABLE = { 'not-registered': 1 };
+
+  function newId() {
+    try {
+      var b = new Uint8Array(12); crypto.getRandomValues(b);
+      return Array.prototype.map.call(b, function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
+    } catch (e) { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
+  }
+
+  function sender(socket, isReady) {
+    var queue = [];
+
+    function fail(item, reason) {
+      clearTimeout(item.qtimer);
+      item.done = true;
+      item.cb('failed', reason);
+    }
+
+    function enqueue(item) {
+      queue.push(item);
+      clearTimeout(item.qtimer);
+      item.qtimer = setTimeout(function () {
+        var i = queue.indexOf(item);
+        if (i >= 0) { queue.splice(i, 1); fail(item, 'offline'); }
+      }, QUEUE_MS);
+    }
+
+    function fire(item) {
+      clearTimeout(item.qtimer);
+      item.tries++;
+      item.cb(item.tries === 1 ? 'sending' : 'retrying');
+      socket.timeout(ACK_MS).emit('send-message', item.payload, function (err, res) {
+        if (item.done) return;
+        if (!err && res && res.ok) { item.done = true; item.cb('sent'); return; }
+        var reason = err ? 'timeout' : ((res && res.reason) || 'error');
+        if (!err && !RETRYABLE[reason]) { fail(item, reason); return; }   // e.g. rate limit, receive-only
+        if (item.tries >= MAX_TRIES) { fail(item, reason); return; }
+        item.cb('retrying');
+        enqueue(item);
+        // Dead or unregistered connection: start a fresh one; the page re-registers, then flush().
+        socket.disconnect();
+        setTimeout(function () { socket.connect(); }, 150);
+      });
+    }
+
+    function send(payload, onState) {
+      var item = { payload: payload, cb: onState || function () {}, tries: 0, done: false };
+      payload.id = payload.id || newId();
+      if (isReady()) fire(item);
+      else { item.cb('queued'); enqueue(item); }
+    }
+
+    function flush() {
+      while (queue.length && isReady()) fire(queue.shift());
+    }
+
+    return { send: send, flush: flush, pending: function () { return queue.length; } };
+  }
+
+  // Button feedback for a send: label per state, green on sent, red on failed.
+  var LABELS = { sending: 'Sending…', queued: 'Reconnecting… will send', retrying: 'Retrying…',
+                 sent: 'Sent ✓', failed: 'Not sent — tap to retry' };
+  var REASON_TEXT = { 'not-allowed': 'This device is receive-only', rate: 'Slow down — too many messages',
+                      empty: 'Nothing to send', 'no-target': 'Pick who to send to' };
+
+  function buttonState(btn, idleLabel) {
+    var t = null;
+    return function (state, reason) {
+      clearTimeout(t);
+      btn.classList.remove('sent', 'failed', 'busy');
+      btn.dataset.busy = (state === 'sending' || state === 'queued' || state === 'retrying') ? '1' : '';
+      btn.textContent = (state === 'failed' && REASON_TEXT[reason]) ? REASON_TEXT[reason] : LABELS[state];
+      if (state === 'sent') { btn.classList.add('sent'); t = setTimeout(function () { btn.textContent = idleLabel; btn.classList.remove('sent'); }, 1200); }
+      else if (state === 'failed') { btn.classList.add('failed'); t = setTimeout(function () { btn.textContent = idleLabel; btn.classList.remove('failed'); }, 6000); }
+      else btn.classList.add('busy');
+    };
+  }
+
+  window.SMGig = { member: member, control: control, tokenFromPath: tokenFromPath, showDead: showDead,
+                   sender: sender, buttonState: buttonState };
 })();

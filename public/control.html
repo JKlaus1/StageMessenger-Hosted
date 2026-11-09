@@ -207,6 +207,8 @@
     }
     #song-send-btn:active { opacity: 0.8; transform: scale(0.98); }
     #song-send-btn.sent { background: #00cc66; color: #000; }
+    #song-send-btn.failed, #send-btn.failed { background: #cc2233; color: #fff; }
+    #song-send-btn.busy, #send-btn.busy { opacity: 0.75; }
     #song-send-btn.no-target { background: #444; color: #888; cursor: default; }
     #sender-page-link {
       display: block; text-align: center; margin-top: 0.6rem; font-size: 0.68rem; font-weight: 700;
@@ -705,26 +707,21 @@
     });
 
     // ── Send ───────────────────────────────────────────────────────────────────
+    const msgState = SMGig.buttonState(sendBtn, 'Send');
+
     function sendMessage() {
       const msg = msgInput.value.trim();
-      if (!msg || !socket.connected) return;
+      if (!msg || sendBtn.dataset.busy) return;
       if (sendBtn.classList.contains('no-target')) return;
 
       const targets = sendToAll ? ['all'] : [...selectedRooms];
 
-      socket.emit('send-message', {
+      tx.send({
         targets,
         message:  msg,
         color:    selectedColor,
         duration: selectedDuration || 86400000,
-      });
-
-      sendBtn.textContent = 'Sent ✓';
-      sendBtn.classList.add('sent');
-      setTimeout(() => {
-        sendBtn.textContent = 'Send';
-        sendBtn.classList.remove('sent');
-      }, 1200);
+      }, msgState);
     }
 
     sendBtn.addEventListener('click', sendMessage);
@@ -751,6 +748,9 @@
     const statusText = document.getElementById('status-text');
     const GID        = decodeURIComponent(location.pathname.split('/')[2] || '');
     const socket     = SMGig.control(GID);
+    // Sends wait for a server receipt; taps while reconnecting are queued (see /sm-gig.js).
+    const tx         = SMGig.sender(socket, () => socket.connected);
+    socket.on('connect', () => tx.flush());
     let   joinToken  = '';
     const joinUrl    = () => joinToken ? `${location.origin}/g/${encodeURIComponent(joinToken)}` : '';
 
@@ -916,19 +916,17 @@
       selectedMode = 'maj';
       document.querySelectorAll('.majmin-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === 'maj'));
     });
+    const songState = SMGig.buttonState(songSendBtn, 'Send Song + Key');
     function sendSong() {
       const song = songInput.value.trim();
-      if (!song || !socket.connected || songSendBtn.classList.contains('no-target')) return;
-      socket.emit('send-message', {
+      if (!song || songSendBtn.dataset.busy || songSendBtn.classList.contains('no-target')) return;
+      tx.send({
         targets:  sendToAll ? ['all'] : [...selectedRooms],
         message:  song,
         subtitle: selectedKey ? 'KEY OF ' + selectedKey + (selectedMode === 'min' ? 'm' : '') : '',
         color:    '#0066cc',
         duration: selectedDuration || 86400000,
-      });
-      songSendBtn.textContent = 'Sent ✓';
-      songSendBtn.classList.add('sent');
-      setTimeout(() => { songSendBtn.textContent = 'Send Song + Key'; songSendBtn.classList.remove('sent'); }, 1200);
+      }, songState);
     }
     songSendBtn.addEventListener('click', sendSong);
     songInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendSong(); });

@@ -219,6 +219,74 @@ try:
         for pg, sel in ((disp, '#msg-screen'), (m1, '#msg-overlay'), (m2, '#msg-overlay'), (lead, '#msg-overlay')):
             pg.click(sel)
 
+        def dismiss_all():
+            for pg, sel in ((disp, '#msg-screen'), (m1, '#msg-overlay'), (m2, '#msg-overlay'), (lead, '#msg-overlay')):
+                if pg.locator(sel + '.visible').count():
+                    pg.click(sel)
+
+        # ── Stays-up-for picker on the phone ─────────────────────────────
+        m2.evaluate("() => { window.__dur = []; socket.on('message', m => window.__dur.push(m.duration)); }")
+        m1.evaluate("() => { window.__songHist = [document.getElementById('song-send-btn').textContent]; new MutationObserver(() => window.__songHist.push(document.getElementById('song-send-btn').textContent)).observe(document.getElementById('song-send-btn'), {childList: true, characterData: true, subtree: true}); }")
+        m1.click('#dur-row .dur-btn[data-dur="10000"]')
+        m1.fill('#sender-msg-input', 'short one')
+        m1.click('#sender-send-btn')
+        expect(m2.locator('#msg-text')).to_have_text('SHORT ONE')
+        check(m2.evaluate('() => window.__dur.at(-1)') == 10000, 'phone picks 10s: message carries 10 s')
+        check(m1.evaluate("() => localStorage.getItem('sm-dur')") == '10000', 'duration choice remembered on the phone')
+        expect(m1.locator('#sender-send-btn')).to_have_text('Sent ✓')
+        check(True, 'button shows Sent ✓ only after the server receipt')
+        dismiss_all()
+        m1.click('#dur-row .dur-btn[data-dur="0"]')
+        m1.fill('#sender-msg-input', 'stay up')
+        m1.click('#sender-send-btn')
+        expect(m2.locator('#msg-text')).to_have_text('STAY UP')
+        check(m2.evaluate('() => window.__dur.at(-1)') == 86400000, 'until dismissed: message stays up (no auto-dismiss)')
+        shot(m1, '07b-sender-duration')
+        dismiss_all()
+
+        # count how often the display receives a given message
+        disp.evaluate("""() => { window.__got = {}; socket.on('message', m => { window.__got[m.message] = (window.__got[m.message] || 0) + 1; }); }""")
+
+        # ── Dead link mid-send (looks connected, packets vanish) ──────────
+        # Drop every outgoing packet (messages and heartbeat replies) while the socket still says "connected".
+        # Bring the phone to the front first: coming back to a tab triggers its own reconnect,
+        # which would replace the patched connection before the send.
+        m1.bring_to_front()
+        m1.wait_for_function('() => socket.connected', timeout=5000)
+        time.sleep(1.5)
+        m1.wait_for_function('() => socket.connected && socket.io.engine.transport.name === "websocket"', timeout=5000)
+        m1.evaluate("() => { window.__dropped = 0; const ws = socket.io.engine.transport.ws; ws.send = () => { window.__dropped++; }; window.__sid0 = socket.id; window.__st = []; new MutationObserver(() => window.__st.push(Math.round(performance.now()) + ':' + document.getElementById('sender-send-btn').textContent)).observe(document.getElementById('sender-send-btn'), {childList: true, characterData: true, subtree: true}); }")
+        check(m1.evaluate('() => socket.connected') is True, 'simulated dead link still looks connected')
+        m1.fill('#sender-msg-input', 'through the outage')
+        m1.click('#sender-send-btn')
+        # Retrying… can last well under a second, so read the button's recorded history.
+        m1.wait_for_function("() => window.__st.some(x => x.endsWith('Sent ✓'))", timeout=15000)
+        expect(disp.locator('#msg-text')).to_have_text('THROUGH THE OUTAGE', timeout=5000)
+        dbg = m1.evaluate('() => ({dropped: window.__dropped, sid0: window.__sid0, sid: socket.id, st: window.__st.map(x => x.split(":").slice(1).join(":"))})')
+        check(dbg['dropped'] >= 1 and dbg['sid'] != dbg['sid0'], 'first send was lost on the dead link; page reconnected on its own')
+        check(dbg['st'][:2] == ['Sending…', 'Retrying…'] and 'Sent ✓' in dbg['st'], 'button went Sending… → Retrying… → Sent ✓')
+        time.sleep(1)
+        check(disp.evaluate("() => window.__got['through the outage']") == 1, 'dead connection: auto-reconnect + resend, shown exactly once')
+        dismiss_all()
+
+        # ── Tapped while offline: queued, sent on reconnect ───────────────
+        m1.bring_to_front()
+        time.sleep(1.5)
+        m1.evaluate('() => socket.disconnect()')
+        m1.fill('#sender-msg-input', 'queued while offline')
+        m1.click('#sender-send-btn')
+        expect(m1.locator('#sender-send-btn')).to_have_text('Reconnecting… will send')
+        time.sleep(1)
+        check(disp.evaluate("() => window.__got['queued while offline']") is None, 'nothing sent while offline')
+        m1.evaluate('() => socket.connect()')
+        expect(disp.locator('#msg-text')).to_have_text('QUEUED WHILE OFFLINE', timeout=10000)
+        expect(m1.locator('#sender-send-btn')).to_have_text('Sent ✓', timeout=5000)
+        time.sleep(1)
+        check(disp.evaluate("() => window.__got['queued while offline']") == 1, 'offline tap is delivered once after reconnect')
+        hist = m1.evaluate('() => window.__songHist')
+        check('Sending…' not in hist, f'song button never fired during quick-message sends ({hist})')
+        dismiss_all()
+
         lead.fill('#song-input', 'sweet caroline')
         lead.click('#song-section .key-btn[data-key="B"]')
         lead.click('#song-send-btn')

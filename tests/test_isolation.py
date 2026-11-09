@@ -335,4 +335,37 @@ ntok = post(admin, '/admin/api/invites', {}).get_json()['token']
 check(anon.get('/api/invite/' + ntok).status_code == 429, 'after 20 bad links from one IP, link checks are throttled')
 live.limiter._hits.clear()
 
+# ── Send receipts (acks) + resend dedupe ─────────────────────────────────────
+live.limiter._hits.clear()
+gk = post(B, '/api/gigs', {'name': 'Ack gig'}).get_json()['gig']
+snd, rcv = member(gk['join_token']), member(gk['join_token'])
+ack = snd.emit('send-message', {'message': 'too early', 'targets': ['all'], 'id': 'm-early'}, callback=True)
+check(ack == {'ok': False, 'reason': 'not-registered'}, 'send before register is refused with a retryable reason')
+register(snd, 'SINGER', role='sender'); register(rcv, 'BASS')
+rcv.get_received()
+ack = snd.emit('send-message', {'message': 'hello', 'targets': ['all'], 'id': 'm-1'}, callback=True)
+check(ack == {'ok': True}, 'delivered send is acked ok')
+check(msgs(rcv) == ['hello'], 'acked message reached the band')
+ack = snd.emit('send-message', {'message': 'hello', 'targets': ['all'], 'id': 'm-1'}, callback=True)
+check(ack.get('ok') and ack.get('duplicate') and msgs(rcv) == [], 'resend with the same id is acked but not shown twice')
+ack = snd.emit('send-message', {'message': 'hello again', 'targets': ['all'], 'id': 'm-2'}, callback=True)
+check(ack == {'ok': True} and msgs(rcv) == ['hello again'], 'a new id is delivered')
+ack = snd.emit('send-message', {'message': 'no id', 'targets': ['all']}, callback=True)
+check(ack == {'ok': True} and msgs(rcv) == ['no id'], 'sends without an id still work (old pages)')
+check(rcv.emit('send-message', {'message': 'x', 'targets': ['all'], 'id': 'r-1'}, callback=True) == {'ok': False, 'reason': 'not-allowed'},
+      'receive-only device gets not-allowed')
+check(snd.emit('send-message', {'message': '  ', 'id': 'm-3'}, callback=True) == {'ok': False, 'reason': 'empty'}, 'empty message refused')
+check(snd.emit('send-message', {'message': 'x', 'targets': ['bogus room'], 'id': 'm-4'}, callback=True) == {'ok': False, 'reason': 'no-target'},
+      'no valid target refused')
+live.limiter._hits.clear()
+results = [snd.emit('send-message', {'message': f'n{i}', 'targets': ['all'], 'id': f'flood-{i}'}, callback=True) for i in range(32)]
+check(results[-1] == {'ok': False, 'reason': 'rate'}, 'rate limit is reported in the receipt')
+live.limiter._hits.clear()
+ack = snd.emit('send-message', {'message': 'dur', 'targets': ['all'], 'id': 'm-dur', 'duration': 10000}, callback=True)
+check(ack == {'ok': True} and [arg0(e)['duration'] for e in events(rcv, 'message')][-1] == 10000, 'chosen duration passes through')
+check(server.socketio.server.async_handlers is False, 'events from one connection are handled in order')
+check(server.socketio.server.eio.ping_interval == 10 and server.socketio.server.eio.ping_timeout == 10, 'dead links detected in ~20 s')
+ctl_k = sio.test_client(app, auth={'kind': 'control', 'gig': gk['id']}, flask_test_client=B)
+check(ctl_k.emit('send-message', {'message': 'op', 'targets': ['all'], 'id': 'c-1'}, callback=True) == {'ok': True}, 'Control sends are acked')
+
 print(f'\nALL {PASSED} CHECKS PASSED')

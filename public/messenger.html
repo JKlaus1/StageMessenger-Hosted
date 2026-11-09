@@ -391,6 +391,18 @@
 
     #sender-send-btn:active { opacity: 0.8; transform: scale(0.98); }
     #sender-send-btn.sent   { background: #00cc66; }
+    #sender-send-btn.failed, #song-send-btn.failed { background: #cc2233; color: #fff; }
+    #sender-send-btn.busy,   #song-send-btn.busy   { opacity: 0.75; }
+
+    /* ── Stays-up-for picker ── */
+    .dur-row { display: flex; gap: 0.35rem; margin-bottom: 1rem; }
+    .dur-btn {
+      flex: 1; padding: 0.6rem 0; background: #14142a; border: 1px solid #2a2a4a; border-radius: 10px;
+      color: #55557a; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.04em; text-align: center;
+      cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; line-height: 1.15;
+    }
+    .dur-btn.active { border-color: #00ff88; color: #00ff88; background: rgba(0,255,136,0.08); }
+    .dur-btn small { display: block; font-size: 0.55rem; font-weight: 700; letter-spacing: 0.06em; }
 
 
     /* Key grid */
@@ -619,6 +631,15 @@
     </div>
 
     <div id="online-count">No other devices connected</div>
+
+    <div class="s-label">Stays up for</div>
+    <div class="dur-row" id="dur-row">
+      <div class="dur-btn" data-dur="10000">10s</div>
+      <div class="dur-btn" data-dur="20000">20s</div>
+      <div class="dur-btn" data-dur="30000">30s</div>
+      <div class="dur-btn" data-dur="60000">1 min</div>
+      <div class="dur-btn" data-dur="0">∞<small>until dismissed</small></div>
+    </div>
 
     <div class="s-label">Next Song</div>
     <div class="sender-input-wrap">
@@ -870,30 +891,43 @@
     // ── Send song + key ────────────────────────────────────────────────────────
     const songInput = document.getElementById('song-input');
 
+    // ── Stays up for (remembered on this phone) ───────────────────────────────
+    let selectedDuration = 30000;
+    try {
+      const saved = localStorage.getItem('sm-dur');
+      if (saved !== null && ['0', '10000', '20000', '30000', '60000'].includes(saved)) selectedDuration = parseInt(saved, 10);
+    } catch (e) { /* private mode */ }
+    document.querySelectorAll('#dur-row .dur-btn').forEach(btn => {
+      btn.classList.toggle('active', parseInt(btn.dataset.dur, 10) === selectedDuration);
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#dur-row .dur-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        selectedDuration = parseInt(btn.dataset.dur, 10);
+        try { localStorage.setItem('sm-dur', String(selectedDuration)); } catch (e) { /* private mode */ }
+      });
+    });
+    // 0 = until dismissed (tap the screen, or Clear from Control); the server caps at 24 h
+    const durationMs = () => selectedDuration || 86400000;
+
+    const songBtn   = document.getElementById('song-send-btn');
+    const songState = SMGig.buttonState(songBtn, 'Send Song + Key');
+
     function sendSong() {
       const song = songInput.value.trim();
-      if (!song || !socket.connected) return;
+      if (!song || songBtn.dataset.busy) return;
 
       let subtitle = '';
       if (selectedKey) {
         subtitle = 'KEY OF ' + selectedKey + (selectedMode === 'min' ? 'm' : '');
       }
 
-      socket.emit('send-message', {
+      tx.send({
         targets:  ['all'],
         message:  song,
         subtitle: subtitle,
         color:    '#0066cc',
-        duration: 30000,
-      });
-
-      const btn = document.getElementById('song-send-btn');
-      btn.textContent = 'Sent ✓';
-      btn.classList.add('sent');
-      setTimeout(() => {
-        btn.textContent = 'Send Song + Key';
-        btn.classList.remove('sent');
-      }, 1200);
+        duration: durationMs(),
+      }, songState);
     }
 
     document.getElementById('song-send-btn').addEventListener('click', sendSong);
@@ -923,23 +957,19 @@
     });
 
     // ── Send ───────────────────────────────────────────────────────────────────
+    const msgSendBtn = document.getElementById('sender-send-btn');
+    const msgState   = SMGig.buttonState(msgSendBtn, 'Send Message');
+
     function sendMessage() {
       const msg = senderInput.value.trim();
-      if (!msg || !socket.connected) return;
-      socket.emit('send-message', {
+      if (!msg || msgSendBtn.dataset.busy) return;
+      tx.send({
         targets:  ['all'],
         message:  msg,
         subtitle: '',
         color:    '#dd6600',
-        duration: 30000,
-      });
-      const btn = document.getElementById('sender-send-btn');
-      btn.textContent = 'Sent ✓';
-      btn.classList.add('sent');
-      setTimeout(() => {
-        btn.textContent = 'Send Message';
-        btn.classList.remove('sent');
-      }, 1200);
+        duration: durationMs(),
+      }, msgState);
     }
 
     document.getElementById('sender-send-btn').addEventListener('click', sendMessage);
@@ -990,7 +1020,12 @@
       senderStTx.textContent = yes ? 'Live' : 'Offline';
     }
 
+    // Sends wait for a server receipt; they only go out once this connection is registered.
+    let registered = false;
+    const tx = SMGig.sender(socket, () => socket.connected && registered);
+
     socket.on('connect', () => {
+      registered = false;
       setConnected(true);
       if (myName) {
         // Re-register with stored name after reconnect
@@ -1009,9 +1044,10 @@
         });
       }
     });
-    socket.on('disconnect', () => setConnected(false));
+    socket.on('disconnect', () => { registered = false; setConnected(false); });
 
     socket.on('register-accepted', (data) => {
+      registered = true;
       myName = data.name;
       myRole = data.role;
       joinError.textContent = '';
@@ -1023,6 +1059,7 @@
         document.getElementById('device-badge').textContent = data.name;
         showScreen(receiverScreen);
       }
+      tx.flush();                       // anything tapped while reconnecting goes out now
     });
 
     socket.on('register-rejected', (data) => {
